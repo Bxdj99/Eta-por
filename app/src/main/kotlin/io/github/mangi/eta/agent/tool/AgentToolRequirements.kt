@@ -6,6 +6,7 @@ import io.github.mangi.eta.agent.model.AgentTerminalToolCatalog
 import io.github.mangi.eta.agent.model.AgentFileToolCatalog
 import io.github.mangi.eta.agent.model.AgentPhoneToolCatalog
 import io.github.mangi.eta.agent.context.PersonalSearchTools
+import io.github.mangi.eta.core.AndroidAgentLogger
 
 internal enum class RootRequirement { NONE, PARTIAL, REQUIRED }
 internal enum class LsposedRequirement { NONE, OPTIONAL, REQUIRED }
@@ -140,7 +141,12 @@ internal object AgentToolRequirements {
         for (index in 0 until tools.length()) {
             val original = tools.getJSONObject(index)
             val name = original.getJSONObject("function").getString("name")
-            val requirement = rootRequirement(name)
+            // 未登记的工具宁可本次不发布，也不能让 requireNotNull 把整轮运行打断
+            // （移植漏登记就是这么炸的：Missing tool requirements: xxx）。
+            val requirement = (find(name) ?: run {
+                AndroidAgentLogger.warn("tool not registered in AgentToolRequirements, skipped: $name")
+                continue
+            }).rootRequirement
             if (!rootAvailable && requirement == RootRequirement.REQUIRED) continue
             val tool = JSONObject(original.toString())
             if (!rootAvailable) projectUnprivileged(tool.getJSONObject("function"))
