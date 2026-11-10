@@ -51,6 +51,10 @@ internal object Prefs {
         const val AGENT_AUTO_COMPACTION_ENABLED = "agent_auto_compaction_enabled"
         const val AGENT_SUBAGENT_ENABLED = "agent_subagent_enabled"
         const val AGENT_VIRTUAL_DISPLAY_ENABLED = "agent_virtual_display_enabled"
+        /** 灵屏使用期间是否点亮并保持屏幕（本机虚拟屏落在默认显示组，熄屏后无障碍就看不到窗口）。 */
+        const val AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE = "agent_virtual_display_keep_awake"
+        /** 灵屏使用期间若处于锁屏，是否自动解除锁屏（锁屏后窗口对无障碍不可见）。 */
+        const val AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD = "agent_virtual_display_dismiss_keyguard"
         const val AGENT_RUNTIME_CONFIG_JSON = "agent_runtime_config_json"
         const val AGENT_DISABLED_TOOLS_JSON = "agent_disabled_tools_json"
 
@@ -74,6 +78,8 @@ internal object Prefs {
             AGENT_AUTO_COMPACTION_ENABLED to true,
             AGENT_SUBAGENT_ENABLED to true,
             AGENT_VIRTUAL_DISPLAY_ENABLED to true,
+            AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE to true,
+            AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD to true,
         )
 
         /** 由 Eta Runtime 最终裁决、不要求 Xposed 框架在线的开关。 */
@@ -87,6 +93,8 @@ internal object Prefs {
             AGENT_AUTO_COMPACTION_ENABLED,
             AGENT_SUBAGENT_ENABLED,
             AGENT_VIRTUAL_DISPLAY_ENABLED,
+            AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE,
+            AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
         )
     }
 

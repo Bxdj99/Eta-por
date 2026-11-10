@@ -289,11 +289,25 @@ internal fun ConversationCategoryActionsDialog(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
+    onMoveUp: () -> Unit = {},
+    onMoveDown: () -> Unit = {},
+    canMoveUp: Boolean = false,
+    canMoveDown: Boolean = false,
 ) {
     if (categoryName == null) return
     val closeText = stringResource(R.string.action_close)
     val body: @Composable () -> Unit = {
         Column(modifier = Modifier.fillMaxWidth()) {
+            CategoryActionRow(
+                text = "上移",
+                enabled = canMoveUp,
+                onClick = onMoveUp,
+            )
+            CategoryActionRow(
+                text = "下移",
+                enabled = canMoveDown,
+                onClick = onMoveDown,
+            )
             CategoryActionRow(
                 text = stringResource(R.string.conversation_category_rename),
                 onClick = onRename,
@@ -344,16 +358,21 @@ internal fun ConversationCategoryActionsDialog(
 private fun CategoryActionRow(
     text: String,
     destructive: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Text(
         text = text,
         style = MiuixTheme.textStyles.body1,
         fontSize = 16.sp,
-        color = if (destructive) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.onSurface,
+        color = when {
+            !enabled -> MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f)
+            destructive -> MiuixTheme.colorScheme.error
+            else -> MiuixTheme.colorScheme.onSurface
+        },
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 12.dp),
     )
 }

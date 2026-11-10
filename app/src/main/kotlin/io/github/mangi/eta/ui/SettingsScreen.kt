@@ -29,6 +29,8 @@ import androidx.compose.material.icons.rounded.Inventory
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
@@ -474,6 +476,24 @@ private fun SettingsPageContent(
                         iconTint = SettingsIconColors.Blue,
                     )
                     CouiIconDivider()
+                    SwitchPref(
+                        context = context,
+                        prefs = agentPrefs,
+                        title = "灵屏使用期间点亮屏幕",
+                        key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE,
+                        icon = Icons.Rounded.LightMode,
+                        iconTint = SettingsIconColors.Orange,
+                    )
+                    CouiIconDivider()
+                    SwitchPref(
+                        context = context,
+                        prefs = agentPrefs,
+                        title = "灵屏使用期间自动解锁",
+                        key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
+                        icon = Icons.Rounded.LockOpen,
+                        iconTint = SettingsIconColors.Green,
+                    )
+                    CouiIconDivider()
                     CouiPreference(
                         title = stringResource(R.string.ui_linux_tool_environment_314d22),
                         icon = {
@@ -894,6 +914,22 @@ private fun SettingsPageContent(
                             key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_ENABLED,
                             icon = Icons.Rounded.Layers,
                             iconTint = SettingsIconColors.Blue,
+                        )
+                        SwitchPref(
+                            context = context,
+                            prefs = agentPrefs,
+                            title = "灵屏使用期间点亮屏幕",
+                            key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE,
+                            icon = Icons.Rounded.LightMode,
+                            iconTint = SettingsIconColors.Orange,
+                        )
+                        SwitchPref(
+                            context = context,
+                            prefs = agentPrefs,
+                            title = "灵屏使用期间自动解锁",
+                            key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
+                            icon = Icons.Rounded.LockOpen,
+                            iconTint = SettingsIconColors.Green,
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_linux_tool_environment_314d22),

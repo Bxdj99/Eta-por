@@ -26,6 +26,7 @@ import io.github.mangi.eta.agent.device.BoundedRootCommandExecutor
 import io.github.mangi.eta.agent.device.DeviceToolContract
 import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.agent.terminal.ShellProcessSupervisor
+import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.safeLogType
 import java.util.concurrent.TimeUnit
@@ -213,6 +214,10 @@ internal object VirtualDisplayController {
      * 所以灵屏会话存活期间持一把会点亮屏幕的唤醒锁，会话结束立刻放开。
      */
     private fun keepScreenAwakeForDisplay(context: Context) {
+        if (!Prefs.isEnabled(Prefs.Keys.AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE)) {
+            io.github.mangi.eta.core.EtaTrace.log("vscr.screen", "keep_awake 开关关闭，跳过点亮")
+            return
+        }
         runCatching {
             val power = context.getSystemService(android.os.PowerManager::class.java) ?: return
             if (displayWakeLock?.isHeld == true) return
@@ -235,6 +240,10 @@ internal object VirtualDisplayController {
      * 结果就是"窗口在、截图有画面、节点数为 0"。所以会话期间顺手把锁屏解掉。
      */
     private fun dismissKeyguardIfLocked(context: Context, rootAvailable: () -> Boolean) {
+        if (!Prefs.isEnabled(Prefs.Keys.AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD)) {
+            io.github.mangi.eta.core.EtaTrace.log("vscr.keyguard", "dismiss 开关关闭，跳过解锁")
+            return
+        }
         val locked = runCatching {
             context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked
         }.getOrNull() ?: return

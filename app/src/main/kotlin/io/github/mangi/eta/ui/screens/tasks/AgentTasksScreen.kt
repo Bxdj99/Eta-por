@@ -80,15 +80,28 @@ internal fun AgentTasksScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tasks by remember { mutableStateOf<List<AgentTaskEntity>>(emptyList()) }
+    // 每个任务最近一次运行的结果预览（一句话），让列表页能直接看到"上次干了什么"
+    var lastPreviews by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var loaded by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf<TaskDraft?>(null) }
     var historyTarget by remember { mutableStateOf<AgentTaskEntity?>(null) }
 
     suspend fun reload() {
-        tasks = withContext(Dispatchers.IO) {
-            runCatching { EtaDatabase.get(context).agentTaskDao().tasks() }.getOrDefault(emptyList())
+        val snapshot = withContext(Dispatchers.IO) {
+            runCatching {
+                val dao = EtaDatabase.get(context).agentTaskDao()
+                val list = dao.tasks()
+                val previews = list.associate { task ->
+                    val latest = runCatching { dao.runs(task.id, 1).firstOrNull() }.getOrNull()
+                    task.id to (latest?.resultPreview?.lineSequence()
+                        ?.firstOrNull { it.isNotBlank() }?.trim().orEmpty())
+                }
+                list to previews
+            }.getOrNull()
         }
+        tasks = snapshot?.first ?: emptyList()
+        lastPreviews = snapshot?.second ?: emptyMap()
         loaded = true
     }
 
@@ -147,6 +160,7 @@ internal fun AgentTasksScreen(onBack: () -> Unit) {
         tasks.forEach { task ->
             TaskCard(
                 task = task,
+                lastPreview = lastPreviews[task.id].orEmpty(),
                 onToggle = { enabled -> toggle(task, enabled) },
                 onRunNow = {
                     runTool("tasks_run", JSONObject().put("taskId", task.id)) {
@@ -300,6 +314,7 @@ private fun TaskDraft.onceInstant(): String {
 @Composable
 private fun TaskCard(
     task: AgentTaskEntity,
+    lastPreview: String = "",
     onToggle: (Boolean) -> Unit,
     onRunNow: () -> Unit,
     onCancel: () -> Unit,
@@ -342,6 +357,16 @@ private fun TaskCard(
                 },
                 modifier = Modifier.padding(top = 6.dp),
             )
+            if (lastPreview.isNotBlank()) {
+                Text(
+                    text = "上次结果：" + lastPreview,
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

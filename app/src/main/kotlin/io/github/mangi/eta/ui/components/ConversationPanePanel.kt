@@ -343,8 +343,36 @@ internal fun ConversationPanePanel(
         onDismiss = { moveTarget = null },
     )
 
+    // 分类排序：按下标重排后统一回写 sortOrder（1..n），不用处理"两条同为 1"的历史数据
+    val moveCategory: (CategorySection, Int) -> Unit = { category, delta ->
+        val ordered = categories.sortedWith(compareBy({ it.sortOrder }, { it.createdAt }))
+        val index = ordered.indexOfFirst { it.id == category.id }
+        val target = index + delta
+        if (index >= 0 && target in ordered.indices) {
+            val reordered = ordered.toMutableList().apply { add(target, removeAt(index)) }
+            categoryWriter { dao ->
+                reordered.forEachIndexed { position, item ->
+                    if (item.sortOrder != position + 1) {
+                        dao.upsert(item.copy(sortOrder = position + 1))
+                    }
+                }
+            }
+        }
+        manageTarget = null
+    }
+    val orderedCategories = remember(categories) {
+        categories.sortedWith(compareBy({ it.sortOrder }, { it.createdAt }))
+    }
+    val managedIndex = manageTarget?.let { target ->
+        orderedCategories.indexOfFirst { it.id == target.id }
+    } ?: -1
+
     ConversationCategoryActionsDialog(
         categoryName = manageTarget?.name,
+        onMoveUp = { manageTarget?.let { moveCategory(it, -1) } },
+        onMoveDown = { manageTarget?.let { moveCategory(it, 1) } },
+        canMoveUp = managedIndex > 0,
+        canMoveDown = managedIndex >= 0 && managedIndex < orderedCategories.lastIndex,
         onRename = {
             renameTarget = manageTarget
             manageTarget = null
