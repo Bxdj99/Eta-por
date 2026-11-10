@@ -98,6 +98,8 @@ internal class SubagentExecutor(
         val subagentId = entry.subagentId
         val childController = AgentRunController()
         val controllerBinding = parentController.register(childController::cancel)
+        // 让"定向插话"能投进这个子智能体自己的循环（父 run 的补充队列不会到这里）
+        SubagentSteerRegistry.register(conversationKey, subagentId, childController)
 
         val resolvedConfig = runCatching { configProvider() }.getOrElse { throwable ->
             SubagentSessionStore.releaseRunning(conversationKey, subagentId)
@@ -263,6 +265,7 @@ internal class SubagentExecutor(
                 command = latestSnapshots[toolCall.id],
             )
         } finally {
+            SubagentSteerRegistry.unregister(subagentId)
             controllerBinding.close()
         }
     }

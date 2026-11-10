@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,6 +48,7 @@ import com.itos.coui.dialog.Dialog
 import com.itos.coui.menu.rememberCouiWindowBackdrop
 import com.itos.coui.theme.CouiTheme
 import io.github.mangi.eta.R
+import io.github.mangi.eta.agent.runtime.AgentRuntimeClient
 import io.github.mangi.eta.agent.subagent.SubagentActivitySnapshot
 import io.github.mangi.eta.agent.subagent.SubagentStepSnapshot
 import io.github.mangi.eta.data.model.AppearanceUiStyle
@@ -55,6 +57,8 @@ import io.github.mangi.eta.ui.components.coui.rememberCouiDialogMaterial
 import io.github.mangi.eta.ui.model.ToolActivityMessageUi
 import io.github.mangi.eta.ui.model.ToolActivityStatusUi
 import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.squircle.squircleSurface
@@ -249,6 +253,10 @@ private fun SubagentInspectorContent(
             ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // 定向插话：只投给这个子智能体的循环，不打断当前步骤，也不会被主线吃掉
+        if (running && snapshot.subagentId.isNotBlank()) {
+            SubagentSteerBox(subagentId = snapshot.subagentId)
+        }
         // 顶部状态与元信息横条：留白克制，只展示关键身份与实时状态
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -482,6 +490,59 @@ private fun SubagentStepRow(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 )
             }
+        }
+    }
+}
+
+/**
+ * 子智能体定向插话输入条。
+ *
+ * 走 [AgentRuntimeClient.steerSubagent]：运行服务会把它投进该子智能体自己的 childController，
+ * 在两次工具调用之间生效。子智能体已经结束时投递会被丢弃，这里直接给出提示。
+ */
+@Composable
+private fun SubagentSteerBox(subagentId: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var text by remember(subagentId) { mutableStateOf("") }
+    var lastResult by remember(subagentId) { mutableStateOf<String?>(null) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        TextField(
+            value = text,
+            onValueChange = { text = it },
+            label = "给这个子智能体补一句（下一步生效）",
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                text = "投递",
+                minWidth = 0.dp,
+                onClick = {
+                    val trimmed = text.trim()
+                    if (trimmed.isEmpty()) {
+                        lastResult = "先写点什么"
+                    } else {
+                        AgentRuntimeClient(context.applicationContext, io.github.mangi.eta.core.AndroidAgentLogger)
+                            .steerSubagent(trimmed, subagentId)
+                        text = ""
+                        lastResult = "已投递，该子智能体下一步会看到"
+                    }
+                },
+            )
+        }
+        lastResult?.let { message ->
+            Text(
+                text = message,
+                style = MiuixTheme.textStyles.footnote2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }

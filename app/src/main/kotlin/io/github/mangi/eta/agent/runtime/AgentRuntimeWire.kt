@@ -84,6 +84,7 @@ internal object AgentRuntimeWire {
     const val MSG_RESUME = 17
     const val MSG_STEER = 18
     const val KEY_CONVERSATION_ID: String = "conversation_id"
+    const val KEY_SUBAGENT_ID: String = "subagent_id"
 
     /** service -> client：返回是否成功重新订阅指定 run。 */
     const val MSG_ATTACH_RUN_RESPONSE = 12

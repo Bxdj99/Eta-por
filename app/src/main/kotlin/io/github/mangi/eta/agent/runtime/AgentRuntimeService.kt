@@ -268,8 +268,20 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
                 AgentRuntimeWire.MSG_STEER -> {
                     val text = msg.data?.getString(AgentRuntimeWire.KEY_PROMPT).orEmpty()
-                    val runId = msg.data?.let(AgentRuntimeWire::runIdFromBundle)?.takeIf { it.isNotBlank() }
-                    requestSupplement(runId ?: displayedRun?.runId, text)
+                    val conversationId = msg.data?.getString(AgentRuntimeWire.KEY_CONVERSATION_ID).orEmpty()
+                    val subagentId = msg.data?.getString(AgentRuntimeWire.KEY_SUBAGENT_ID).orEmpty()
+                    if (subagentId.isNotBlank()) {
+                        // 定向给正在跑的子智能体：投它自己的 childController，不进主线补充队列
+                        val delivered = io.github.mangi.eta.agent.subagent.SubagentSteerRegistry
+                            .steer(subagentId, text, conversationId)
+                        io.github.mangi.eta.core.EtaTrace.log(
+                            "subagent.steer",
+                            "subagent=$subagentId delivered=$delivered conv=$conversationId",
+                        )
+                    } else {
+                        val runId = msg.data?.let(AgentRuntimeWire::runIdFromBundle)?.takeIf { it.isNotBlank() }
+                        requestSupplement(runId ?: displayedRun?.runId, text)
+                    }
                 }
 
                 AgentRuntimeWire.MSG_CANCEL -> {

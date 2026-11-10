@@ -136,6 +136,21 @@ internal class AgentRuntimeClient(
         }
     }
 
+    /** 对某个正在跑的子智能体定向插话：投进它自己的循环，不会被主线吃掉。 */
+    fun steerSubagent(text: String, subagentId: String, conversationId: String = "") {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || subagentId.isBlank()) return
+        withRuntimeMessenger(Unit) { serviceMessenger ->
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_STEER)
+            msg.data = Bundle().apply {
+                putString(AgentRuntimeWire.KEY_PROMPT, trimmed)
+                putString(AgentRuntimeWire.KEY_CONVERSATION_ID, conversationId)
+                putString(AgentRuntimeWire.KEY_SUBAGENT_ID, subagentId)
+            }
+            serviceMessenger.send(msg)
+        }
+    }
+
     /** 运行中插话：下一个 turn 生效，不取消当前请求。 */
     fun steerRun(text: String, conversationId: String = "") {
         val trimmed = text.trim()
