@@ -32,7 +32,7 @@ val buildMetadataSuffix = buildMetadata?.let { "+$it" }.orEmpty()
 android {
     namespace = "io.github.mangi.eta"
     compileSdk = 37
-    ndkVersion = libs.versions.ndk.get()
+    // 本机无 x86_64 NDK 可用：.so 全走 jniLibs 预编译
 
     defaultConfig {
         applicationId = "io.github.mangi.eta"
@@ -99,7 +99,7 @@ android {
         }
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += setOf("**/libproot_exec.so", "**/libproot_loader.so", "**/libeta_pty.so")
+            keepDebugSymbols += setOf("**/*.so")
         }
         resources {
             // 合并 Xposed 模块声明，避免 release 裁剪后模块入口失效

@@ -12,6 +12,8 @@ class AgentNotificationHistoryService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         record(sbn)
+        // 有通知说明系统已经醒着，零成本补跑过期任务
+        io.github.mangi.eta.agent.automation.AgentTaskScheduler.opportunisticRun(this)
     }
 
     override fun onListenerConnected() {

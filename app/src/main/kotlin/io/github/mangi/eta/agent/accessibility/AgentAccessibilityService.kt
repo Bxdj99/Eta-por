@@ -134,6 +134,8 @@ class AgentAccessibilityService : AccessibilityService() {
                     bumpWindowContentGeneration(event.windowId)
                 }
                 signalWindowChanged()
+                // 亮屏/解锁/切前台：顺手补跑过期未跑的自动任务（深睡期间闹钟会被系统扣掉）
+                io.github.mangi.eta.agent.automation.AgentTaskScheduler.opportunisticRun(this)
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 bumpWindowContentGeneration(event.windowId)

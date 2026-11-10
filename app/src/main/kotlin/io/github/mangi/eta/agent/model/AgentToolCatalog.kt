@@ -39,6 +39,7 @@ internal object AgentToolCatalog {
                 githubDiscovery = skillGitHubDiscovery,
                 githubInstall = skillGitHubInstall,
             )
+            AgentTaskToolCatalog.appendTo(tools)
             if (memoryTools) AgentMemoryToolCatalog.appendTo(tools, writable = memoryWritable)
             if (terminalTools) {
                 AgentFileVisionToolCatalog.appendTo(tools)

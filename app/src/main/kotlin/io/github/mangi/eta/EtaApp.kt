@@ -59,6 +59,14 @@ class EtaApp : Application(), XposedServiceHelper.OnServiceListener {
         }
         PredictiveBackController.apply(applicationInfo, predictiveBackEnabled)
         AgentMemoryRepository.init(this)
+        io.github.mangi.eta.core.EtaTrace.init(filesDir)
+        // 自动任务：启动时补跑过期任务并重排闹钟（深睡期间系统可能把闹钟扣掉）
+        applicationScope.launch(Dispatchers.IO) {
+            runCatching {
+                io.github.mangi.eta.agent.automation.AgentTaskScheduler.enqueueDue(this@EtaApp)
+                io.github.mangi.eta.agent.automation.AgentTaskScheduler.refresh(this@EtaApp)
+            }.onFailure { io.github.mangi.eta.core.EtaTrace.log("task.boot", "启动调度失败 " + it.javaClass.simpleName) }
+        }
         ProviderRepository.init(this)
         McpServerRepository.init(this)
         XposedServiceHelper.registerListener(this)
