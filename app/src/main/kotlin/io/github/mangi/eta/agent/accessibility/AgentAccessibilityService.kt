@@ -254,6 +254,14 @@ class AgentAccessibilityService : AccessibilityService() {
             indexedNodes = indexedNodes.toList(),
             displayId = displayId,
         )
+        runCatching {
+            io.github.mangi.eta.core.EtaTrace.log(
+                "a11y.tree",
+                "display=$displayId pkg=${snapshot.packageName} nodes=${snapshot.nodes.size} " +
+                    "visited=${traversal.visitedNodes} truncated=${traversal.truncated} " +
+                    "rootChildren=${runCatching { root.childCount }.getOrDefault(-1)}",
+            )
+        }
         AndroidAgentLogger.debug {
             "Agent accessibility action=observe_tree observation=${snapshot.id} " +
                 "display=$displayId nodes=${snapshot.nodes.size} visited=${traversal.visitedNodes} " +

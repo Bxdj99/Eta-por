@@ -166,6 +166,7 @@ internal object VirtualDisplayController {
                 }
                 AndroidAgentLogger.info("Virtual display ready: displayId=$id size=${width}x$height")
                 keepScreenAwakeForDisplay(appContext)
+                dismissKeyguardIfLocked(appContext, rootAvailable)
                 // 建屏即量一次无障碍可见性：0 个窗口 = 这块屏对 a11y 是瞎的（后续节点动作都不可用）。
                 val flags = runCatching { manager.getDisplay(id)?.flags ?: 0 }.getOrDefault(0)
                 val a11yWindows = io.github.mangi.eta.agent.accessibility.AgentAccessibilityService.windowCountOnDisplay(id)
@@ -175,7 +176,9 @@ internal object VirtualDisplayController {
                 io.github.mangi.eta.core.EtaTrace.log(
                     "vscr.create",
                     "display=$id size=${width}x$height flags=0x${Integer.toHexString(flags)} " +
-                        "interactive=$interactive a11yWindows=$a11yWindows",
+                        "interactive=$interactive keyguard=${runCatching {
+                            appContext.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked
+                        }.getOrNull()} a11yWindows=$a11yWindows",
                 )
                 return id
             } catch (exception: Exception) {
@@ -217,6 +220,30 @@ internal object VirtualDisplayController {
             displayWakeLock = lock
             io.github.mangi.eta.core.EtaTrace.log("vscr.screen", "acquire 点亮屏幕以保持灵屏可交互")
         }.onFailure { AndroidAgentLogger.warn("Virtual display screen wake failed: ${it.javaClass.simpleName}") }
+    }
+
+    /**
+     * 屏亮了但还停在锁屏上时，虚拟屏里的应用窗口对无障碍是"不可见"的：
+     * `AccessibilityNodeInfo.isVisibleToUser=false` 会让节点遍历在 depth>0 处整枝裁掉，
+     * 结果就是"窗口在、截图有画面、节点数为 0"。所以会话期间顺手把锁屏解掉。
+     */
+    private fun dismissKeyguardIfLocked(context: Context, rootAvailable: () -> Boolean) {
+        val locked = runCatching {
+            context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked
+        }.getOrNull() ?: return
+        io.github.mangi.eta.core.EtaTrace.log("vscr.keyguard", "locked=$locked")
+        if (!locked || !rootAvailable()) return
+        runCatching {
+            val exec = BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = rootAvailable)
+            try {
+                exec.execute("cmd window dismiss-keyguard", timeoutMillis = 4_000L)
+            } finally {
+                exec.close()
+            }
+            io.github.mangi.eta.core.EtaTrace.log("vscr.keyguard", "dismiss requested")
+        }.onFailure {
+            AndroidAgentLogger.warn("Virtual display keyguard dismiss failed: ${it.javaClass.simpleName}")
+        }
     }
 
     private fun releaseScreenWake() {
