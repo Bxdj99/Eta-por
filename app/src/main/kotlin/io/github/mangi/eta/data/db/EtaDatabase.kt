@@ -27,8 +27,10 @@ import androidx.room.migration.Migration
         UserPersonaEntity::class,
         AgentTaskEntity::class,
         AgentTaskRunEntity::class,
+        ConversationCategoryEntity::class,
+        ConversationCategoryLinkEntity::class,
     ],
-    version = 26,
+    version = 27,
     exportSchema = false,
 )
 internal abstract class EtaDatabase : RoomDatabase() {
@@ -39,6 +41,7 @@ internal abstract class EtaDatabase : RoomDatabase() {
     abstract fun mcpServerDao(): McpServerDao
     abstract fun characterDao(): CharacterDao
     abstract fun agentTaskDao(): AgentTaskDao
+    abstract fun conversationCategoryDao(): ConversationCategoryDao
 
     companion object {
         @Volatile
@@ -72,6 +75,7 @@ internal abstract class EtaDatabase : RoomDatabase() {
                         MIGRATION_23_24,
                         MIGRATION_24_25,
                         MIGRATION_25_26,
+                        MIGRATION_26_27,
                     )
                     .addCallback(object : Callback() {
                         override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) { createTextChunkCleanup(db) }
@@ -126,6 +130,16 @@ internal abstract class EtaDatabase : RoomDatabase() {
 
         internal val MIGRATION_23_24 = Migration(23, 24) { database ->
             database.execSQL("ALTER TABLE conversations ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+        }
+
+        /** 26 → 27：移植会话分类（独立表 + 映射表，不动 conversations 既有列）。 */
+        internal val MIGRATION_26_27 = Migration(26, 27) { database ->
+            database.execSQL("CREATE TABLE IF NOT EXISTS conversation_categories (" +
+                "id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL, created_at INTEGER NOT NULL)")
+            database.execSQL("CREATE TABLE IF NOT EXISTS conversation_category_links (" +
+                "conversation_id TEXT NOT NULL PRIMARY KEY, category_id TEXT NOT NULL, updated_at INTEGER NOT NULL)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_conversation_category_links_category_id " +
+                "ON conversation_category_links(category_id)")
         }
 
         /** 25 → 26：移植自动任务（补丁链/fork 特有），新增 tasks 两张表。 */
