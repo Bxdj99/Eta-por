@@ -44,6 +44,15 @@ internal object AgentToolRequirements {
             "skills_list", "skills_read", "skills_read_resource", "skills_list_curated",
             "skills_inspect_github", "skills_install_from_github",
         )
+        // 3.4.1 移植工具（自动任务 + 会话分类）：只碰本地库与 WorkManager/Alarm 调度，
+        // 不需要 root、无障碍或前台入口。漏登记会被 rootRequirement() 里的 requireNotNull
+        // 直接抛成 "Missing tool requirements: xxx"，把整轮 Runtime 运行打断（本机实测过）。
+        register(
+            RootRequirement.NONE,
+            "conversation_categories",
+            "tasks_triggers", "tasks_list", "tasks_create", "tasks_update",
+            "tasks_delete", "tasks_run", "tasks_cancel", "tasks_history",
+        )
         register(
             RootRequirement.PARTIAL,
             "press_key", "network_info", "get_setting", "recent_notifications",
