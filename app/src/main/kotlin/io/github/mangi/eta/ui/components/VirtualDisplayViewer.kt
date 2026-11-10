@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
@@ -72,6 +73,8 @@ internal fun VirtualDisplayViewer(
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var notice by remember { mutableStateOf<String?>(null) }
     var textOpen by remember { mutableStateOf(false) }
+    val textFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val viewport = remember(canvasSize, snapshot.width, snapshot.height) {
         VirtualScreenViewport.fit(
             canvasSize.width,
@@ -147,6 +150,16 @@ internal fun VirtualDisplayViewer(
                         color = Color.White.copy(alpha = 0.65f),
                     )
                 }
+                top.yukonga.miuix.kmp.basic.TextButton(
+                    text = "浮窗",
+                    minWidth = 0.dp,
+                    onClick = {
+                        io.github.mangi.eta.agent.runtime.AgentRuntimeService
+                            .showVirtualScreenFloat(context)
+                        notice = "已开悬浮小窗，可边看边点"
+                    },
+                )
+                Spacer(Modifier.width(6.dp))
                 IconButton(
                     onClick = { textOpen = true },
                     minWidth = 36.dp,
@@ -265,6 +278,12 @@ internal fun VirtualDisplayViewer(
             }
             if (textOpen) {
                 var input by remember { mutableStateOf("") }
+                // 打开输入条就把焦点和软键盘拉起来，不用再点一次输入框
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(60)
+                    runCatching { textFocus.requestFocus() }
+                    keyboard?.show()
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -279,6 +298,7 @@ internal fun VirtualDisplayViewer(
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White),
                         modifier = Modifier
                             .weight(1f)
+                            .focusRequester(textFocus)
                             .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     )

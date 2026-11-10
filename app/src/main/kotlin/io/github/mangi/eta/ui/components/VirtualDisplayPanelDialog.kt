@@ -92,6 +92,19 @@ internal fun VirtualDisplayPanelDialog(
                         .fillMaxWidth()
                         .padding(top = 10.dp),
                 )
+                TextButton(
+                    text = "开悬浮小窗（边看边操作）",
+                    onClick = {
+                        io.github.mangi.eta.agent.runtime.AgentRuntimeService
+                            .showVirtualScreenFloat(context)
+                        notice = "已开悬浮小窗"
+                        onDismiss()
+                    },
+                    minWidth = 0.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

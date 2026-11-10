@@ -175,6 +175,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // 流体云/仪表盘上的按钮走 PendingIntent.getService 进来，在这里落到运行时控制。
         when (intent?.action) {
+            ACTION_SHOW_VSRC_FLOAT -> {
+                showVsrcFloat()
+                return START_NOT_STICKY
+            }
+            ACTION_HIDE_VSRC_FLOAT -> {
+                hideVsrcFloat()
+                return START_NOT_STICKY
+            }
             ACTION_PAUSE_RUN -> requestPause(intent.getStringExtra(EXTRA_RUN_ID))
             ACTION_PAUSE_RUNS -> requestPause(null)
             ACTION_RESUME_RUN -> requestResume()
@@ -1307,6 +1315,66 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         runCatching { dispatcher.unregisterOnBackInvokedCallback(callback) }
     }
 
+    private var vsrcFloatView: ComposeView? = null
+
+    private var vsrcFloatParams: WindowManager.LayoutParams? = null
+
+    /** 灵屏悬浮小窗：贴屏幕右上，标题条拖动，内容区点/滑直接注入灵屏。 */
+    private fun showVsrcFloat() {
+        if (vsrcFloatView != null) return
+        val windowManager = getSystemService(WindowManager::class.java) ?: return
+        val view = createOverlayComposeView {
+            io.github.mangi.eta.ui.components.VirtualScreenFloatContent(
+                onClose = { hideVsrcFloat() },
+                onOpenFullscreen = {
+                    hideVsrcFloat()
+                    runCatching {
+                        startActivity(
+                            Intent(this, MainActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                },
+                onDragBy = { dx, dy ->
+                    val params = vsrcFloatParams ?: return@VirtualScreenFloatContent
+                    params.x -= dx.toInt()
+                    params.y += dy.toInt()
+                    val target = vsrcFloatView ?: return@VirtualScreenFloatContent
+                    runCatching {
+                        getSystemService(WindowManager::class.java)?.updateViewLayout(target, params)
+                    }
+                },
+            )
+        }
+        val params = WindowManager.LayoutParams(
+            dpToPx(210),
+            dpToPx(400),
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            x = dpToPx(8)
+            y = dpToPx(160)
+        }
+        runCatching { windowManager.addView(view, params) }.onFailure {
+            AndroidAgentLogger.warn("virtual screen float window add failed: ${it.javaClass.simpleName}")
+            return
+        }
+        vsrcFloatView = view
+        vsrcFloatParams = params
+        AndroidAgentLogger.debug { "virtual screen float window shown" }
+    }
+
+    private fun hideVsrcFloat() {
+        val view = vsrcFloatView ?: return
+        runCatching { getSystemService(WindowManager::class.java)?.removeView(view) }
+        vsrcFloatView = null
+        vsrcFloatParams = null
+    }
+
     private fun createOverlayComposeView(content: @Composable () -> Unit): ComposeView =
         ComposeView(overlayContext()).apply {
             setViewTreeLifecycleOwner(this@AgentRuntimeService)
@@ -1557,6 +1625,27 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ACTION_RESUME_RUN = "io.github.mangi.eta.agent.runtime.RESUME_RUN"
         const val ACTION_PAUSE_RUNS = "io.github.mangi.eta.agent.runtime.PAUSE_RUNS"
         const val ACTION_STOP_RUN = "io.github.mangi.eta.agent.runtime.STOP_RUN"
+        const val ACTION_SHOW_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_SHOW"
+        const val ACTION_HIDE_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_HIDE"
+
+        /** 打开灵屏悬浮小窗（由 App 内面板/查看器调用）。 */
+        fun showVirtualScreenFloat(context: Context) {
+            runCatching {
+                context.startService(
+                    Intent(context, AgentRuntimeService::class.java)
+                        .setAction(ACTION_SHOW_VSRC_FLOAT)
+                )
+            }
+        }
+
+        fun hideVirtualScreenFloat(context: Context) {
+            runCatching {
+                context.startService(
+                    Intent(context, AgentRuntimeService::class.java)
+                        .setAction(ACTION_HIDE_VSRC_FLOAT)
+                )
+            }
+        }
         const val EXTRA_RUN_ID = "run_id"
         @Volatile
         private var activeInstance: AgentRuntimeService? = null

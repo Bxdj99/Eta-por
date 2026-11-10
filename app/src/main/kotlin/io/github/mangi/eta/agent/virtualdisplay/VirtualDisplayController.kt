@@ -951,7 +951,9 @@ internal object VirtualDisplayController {
     }
 
     private fun createUiPreviewBitmap(source: Bitmap): Bitmap {
-        val maxTargetHeight = if (highFrequencyPreview) 1080 else 480
+        // 有人正在看（查看器/悬浮窗）时抬到 1440，画面明显更清楚。
+        // 不直接把 latestFullBitmap 交给 UI：它下一帧就会被回收，UI 会踩到已回收的 Bitmap。
+        val maxTargetHeight = if (highFrequencyPreview) 1440 else 480
         if (source.height <= maxTargetHeight) {
             return source.copy(Bitmap.Config.ARGB_8888, false)
         }
