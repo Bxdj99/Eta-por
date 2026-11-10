@@ -125,6 +125,19 @@ internal fun VirtualDisplayPanelDialog(
                     )
                 }
             }
+            TextButton(
+                text = "开悬浮小窗（没在跑也能先开着）",
+                onClick = {
+                    io.github.mangi.eta.agent.runtime.AgentRuntimeService
+                        .showVirtualScreenFloat(context)
+                    notice = "已开悬浮小窗"
+                    onDismiss()
+                },
+                minWidth = 0.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+            )
             Spacer(Modifier.height(4.dp))
         }
     }
