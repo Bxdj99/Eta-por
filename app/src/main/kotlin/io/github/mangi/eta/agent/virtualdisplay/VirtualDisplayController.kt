@@ -101,8 +101,15 @@ internal object VirtualDisplayController {
             if (existing != null) {
                 val bridge = synchronized(lock) { displayResources?.bridge }
                 if ((bridge == null || bridge.isAlive) && isDisplayUsable(manager, existing.displayId)) {
-                    synchronized(lock) {
-                        if (sessionState.isCurrent(existing.token)) return existing.displayId
+                    val reusable = synchronized(lock) { sessionState.isCurrent(existing.token) }
+                    if (reusable) {
+                        cancelGraceRelease()
+                        keepScreenAwakeForDisplay(appContext)
+                        io.github.mangi.eta.core.EtaTrace.log(
+                            "vscr.keep",
+                            "复用既有屏 display=${existing.displayId}",
+                        )
+                        return existing.displayId
                     }
                 }
                 releaseSession(appContext, rootAvailable, existing.token)
@@ -712,10 +719,44 @@ internal object VirtualDisplayController {
         }
     }
 
+    /** 闲置多久之后才真正拆屏：宽限期内下一次使用直接复用同一块屏与应用状态。 */
+    private val graceMillis = 4 * 60 * 1000L
+    private val graceHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    @Volatile
+    private var graceRelease: Runnable? = null
+
+    private fun cancelGraceRelease() {
+        graceRelease?.let { graceHandler.removeCallbacks(it) }
+        graceRelease = null
+    }
+
     fun release(
         context: Context? = null,
         rootAvailable: () -> Boolean = { RootAccess.isGranted },
-    ) = releaseSession(context, rootAvailable)
+    ) {
+        // 不再"一 release 就拆屏"：实测每轮都会新建一个 display（43/44/45/48/51/54…），
+        // 应用状态与滚动位置全丢，下一轮还得重新拉起。这里改成宽限保留：
+        // 屏幕唤醒锁立刻放开（屏幕可以正常熄灭），屏与应用再留几分钟。
+        releaseScreenWake()
+        val appContext = context?.applicationContext
+        if (appContext == null) {
+            releaseSession(context, rootAvailable)
+            return
+        }
+        cancelGraceRelease()
+        val runnable = Runnable {
+            graceRelease = null
+            io.github.mangi.eta.core.EtaTrace.log("vscr.keep", "宽限期结束，拆屏")
+            releaseSession(appContext, rootAvailable)
+        }
+        graceRelease = runnable
+        graceHandler.postDelayed(runnable, graceMillis)
+        io.github.mangi.eta.core.EtaTrace.log(
+            "vscr.keep",
+            "release 请求转为宽限保留 ${graceMillis / 1000}s（屏幕锁已放开）",
+        )
+    }
 
     private fun releaseSession(
         context: Context?,

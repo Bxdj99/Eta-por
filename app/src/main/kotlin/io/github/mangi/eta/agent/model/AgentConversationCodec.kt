@@ -24,7 +24,19 @@ internal object AgentConversationCodec {
         json.encodeToString(messages.map(::sanitizeMessage))
 
     fun encodeConversationCheckpoint(messages: List<AgentModelClient.ConversationMessage>): String =
-        encodeTranscriptForStorage(messages)
+        json.encodeToString(messages.map { compactSkillBlocks(sanitizeMessage(it)) })
+
+    /**
+     * 斜杠命令注入的技能正文只在当轮有意义：留在历史里等于之后每轮都重复几 KB。
+     * 落库时压成一行自闭合标记（展示层另有 strip，两处互不影响）。
+     */
+    private fun compactSkillBlocks(
+        message: AgentModelClient.ConversationMessage,
+    ): AgentModelClient.ConversationMessage {
+        if (message.role != "user" || message.contentJson.isNotBlank()) return message
+        val compacted = AgentSkillCommandPromptCodec.compactForHistory(message.content)
+        return if (compacted == message.content) message else message.copy(content = compacted)
+    }
 
     fun decodeTranscript(raw: String?): List<AgentModelClient.ConversationMessage> =
         if (raw.isNullOrBlank()) {
