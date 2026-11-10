@@ -401,6 +401,27 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             sendResultTo(replyTo, AgentRuntimeWire.RunResult(request.runId, false, "", "Agent Runtime 服务已停止"))
             return null
         }
+        // 多会话并发的内存闸门（移植自 fork）：并发数取「剩余内存算出的弹性上限」与硬上限的较小值。
+        val runningCount = runs.all().count { !it.session.isTerminal }
+        val limit = runCatching { AgentMemoryGate.sessionLimit() }
+            .getOrDefault(MAX_CONCURRENT_RUNS)
+            .coerceAtMost(MAX_CONCURRENT_RUNS)
+        if (runningCount >= limit) {
+            incoming?.close()
+            sendRequestIngestedTo(replyTo, request.runId)
+            sendResultTo(
+                replyTo,
+                AgentRuntimeWire.RunResult(
+                    request.runId, false, "",
+                    "并发会话已达上限（$runningCount/$limit，剩余 ${AgentMemoryGate.availableMb()}MB），请等前一个会话结束后再试",
+                ),
+            )
+            io.github.mangi.eta.core.EtaTrace.log(
+                "run.admit",
+                "拒绝 ${request.runId} 并发=$runningCount/$limit 剩余=${AgentMemoryGate.availableMb()}MB",
+            )
+            return null
+        }
         val admission = runs.admit(request) {
             lateinit var session: AgentRuntimeSession
             session = AgentRuntimeSession(
@@ -1518,6 +1539,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         )
 
     companion object {
+        /** 会话并发硬上限；实际并发由 AgentMemoryGate.sessionLimit() 按剩余内存决定。 */
+        const val MAX_CONCURRENT_RUNS = 6
         const val ACTION_PAUSE_RUN = "io.github.mangi.eta.agent.runtime.PAUSE_RUN"
         const val ACTION_RESUME_RUN = "io.github.mangi.eta.agent.runtime.RESUME_RUN"
         const val ACTION_PAUSE_RUNS = "io.github.mangi.eta.agent.runtime.PAUSE_RUNS"
