@@ -82,6 +82,7 @@ fun ConversationSidePaneScaffold(
     onOpenModelProviders: () -> Unit,
     onOpenTools: () -> Unit,
     onOpenSkills: () -> Unit,
+    onOpenTasks: () -> Unit,
     onOpenCharacters: () -> Unit,
     onOpenPermissions: () -> Unit,
     modifier: Modifier = Modifier,
@@ -235,6 +236,7 @@ fun ConversationSidePaneScaffold(
                         onOpenModelProviders = onOpenModelProviders,
                         onOpenTools = onOpenTools,
                         onOpenSkills = onOpenSkills,
+                        onOpenTasks = onOpenTasks,
                         onOpenCharacters = onOpenCharacters,
                         onOpenPermissions = onOpenPermissions,
                         modifier = Modifier

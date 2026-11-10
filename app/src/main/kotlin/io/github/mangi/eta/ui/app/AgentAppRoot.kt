@@ -90,6 +90,7 @@ import io.github.mangi.eta.ui.screens.memory.AgentMemoryScreen
 import io.github.mangi.eta.ui.screens.permissions.PermissionHealthScreen
 import io.github.mangi.eta.ui.screens.skills.AgentSkillsScreen
 import io.github.mangi.eta.ui.screens.subagent.SubagentSettingsScreen
+import io.github.mangi.eta.ui.screens.tasks.AgentTasksScreen
 import io.github.mangi.eta.ui.screens.terminal.LinuxEnvironmentScreen
 import io.github.mangi.eta.ui.screens.terminal.LinuxFilesScreen
 import io.github.mangi.eta.ui.screens.terminal.SharedFoldersScreen
@@ -364,6 +365,7 @@ fun AgentAppRoot(
             },
             onOpenTools = { pushRoute(AppRoute.Tools) },
             onOpenSkills = { pushRoute(AppRoute.Skills) },
+            onOpenTasks = { pushRoute(AppRoute.Tasks) },
             onOpenCharacters = { pushRoute(AppRoute.Characters) },
             onOpenPermissions = { pushRoute(AppRoute.Permissions) },
             onOpenSettings = { pushRoute(AppRoute.Settings) },
@@ -499,6 +501,9 @@ fun AgentAppRoot(
             }
             entry<AppRoute.Subagents>(swipeDismiss = swipeDismiss) {
                 SubagentSettingsScreen(onBack = ::popRoute)
+            }
+            entry<AppRoute.Tasks>(swipeDismiss = swipeDismiss) {
+                AgentTasksScreen(onBack = ::popRoute)
             }
             entry<AppRoute.Skills>(swipeDismiss = swipeDismiss) {
                 LaunchedEffect(Unit) {

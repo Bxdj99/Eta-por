@@ -123,6 +123,7 @@ internal fun AgentAppShell(
     onConversationDelete: (ConversationSummaryUi) -> Unit,
     onOpenTools: () -> Unit,
     onOpenSkills: () -> Unit,
+    onOpenTasks: () -> Unit,
     onOpenCharacters: () -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -271,6 +272,7 @@ internal fun AgentAppShell(
                 onOpenModelProviders = onOpenModelProviders,
                 onOpenTools = onOpenTools,
                 onOpenSkills = onOpenSkills,
+                onOpenTasks = onOpenTasks,
                 onOpenCharacters = onOpenCharacters,
                 onOpenPermissions = onOpenPermissions,
             ) {
@@ -607,6 +609,7 @@ private fun titleForRoute(route: AppRoute?): String = when (route) {
     is AppRoute.Tools -> stringResource(R.string.route_tools)
     is AppRoute.WebToolsSettings -> stringResource(R.string.web_tools_settings_title)
     is AppRoute.Skills -> stringResource(R.string.route_skills)
+    is AppRoute.Tasks -> "自动任务"
     is AppRoute.Subagents -> "Subagent"
     is AppRoute.Characters -> "角色"
     is AppRoute.CharacterDetail -> "角色详情"

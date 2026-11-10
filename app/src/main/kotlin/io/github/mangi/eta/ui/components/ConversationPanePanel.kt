@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.SportsBar
@@ -155,6 +156,7 @@ internal fun ConversationPanePanel(
     onOpenModelProviders: () -> Unit,
     onOpenTools: () -> Unit,
     onOpenSkills: () -> Unit,
+    onOpenTasks: () -> Unit,
     onOpenCharacters: () -> Unit,
     onOpenPermissions: () -> Unit,
     modifier: Modifier = Modifier,
@@ -286,6 +288,7 @@ internal fun ConversationPanePanel(
                         onOpenModelProviders = onOpenModelProviders,
                         onOpenTools = onOpenTools,
                         onOpenSkills = onOpenSkills,
+                        onOpenTasks = onOpenTasks,
                         onOpenCharacters = onOpenCharacters,
                         onOpenPermissions = onOpenPermissions,
                     )
@@ -817,6 +820,7 @@ private fun PaneDock(
     onOpenModelProviders: () -> Unit,
     onOpenTools: () -> Unit,
     onOpenSkills: () -> Unit,
+    onOpenTasks: () -> Unit,
     onOpenCharacters: () -> Unit,
     onOpenPermissions: () -> Unit,
 ) {
@@ -846,6 +850,12 @@ private fun PaneDock(
             icon = Icons.Outlined.AutoStories,
             label = "Skills",
             onClick = onOpenSkills,
+            modifier = Modifier.weight(1f),
+        )
+        DockEntry(
+            icon = Icons.Outlined.Schedule,
+            label = "自动任务",
+            onClick = onOpenTasks,
             modifier = Modifier.weight(1f),
         )
         DockEntry(
