@@ -78,6 +78,7 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.input.ImeAction
@@ -99,6 +100,8 @@ import io.github.mangi.eta.ui.model.AgentContextUsageUi
 import io.github.mangi.eta.ui.model.AgentModelPickerUiState
 import io.github.mangi.eta.ui.model.PendingFileReferenceUi
 import io.github.mangi.eta.ui.model.PendingImageUi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import io.github.mangi.eta.ui.model.QueuedMessageUi
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.DropdownImpl
@@ -164,7 +167,24 @@ internal fun AgentChatInputBar(
     val keyboard = LocalSoftwareKeyboardController.current
     val hapticFeedback = LocalHapticFeedback.current
     val focusRequester = remember { FocusRequester() }
+    val context = LocalContext.current
     val textFieldState = rememberTextFieldState(initialText = input)
+    // 斜杠命令：只在输入以 / 开头时拉一次候选，之后按关键字本地过滤
+    var skillCommands by remember { mutableStateOf<List<io.github.mangi.eta.agent.skill.AgentSkillCommands.Suggestion>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        skillCommands = withContext(Dispatchers.IO) { io.github.mangi.eta.agent.skill.AgentSkillCommands.all(context) }
+    }
+    val skillQuery = io.github.mangi.eta.agent.skill.AgentSkillCommands.queryOf(textFieldState.text.toString())
+    val skillSuggestions = remember(skillQuery, skillCommands) {
+        if (skillQuery == null) {
+            emptyList()
+        } else {
+            val keyword = skillQuery.lowercase()
+            skillCommands
+                .filter { it.alias.lowercase().contains(keyword) || it.name.lowercase().contains(keyword) }
+                .take(8)
+        }
+    }
     val speechSettings by remember { SpeechSettingsRepository.settingsFlow() }.collectAsState(initial = null)
     val recognitionEnabled = speechSettings?.recognitionEnabled == true
     val dictation = rememberSpeechInput { recognized ->
@@ -293,6 +313,19 @@ internal fun AgentChatInputBar(
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 // 与输入框内正文同一起点（容器 10dp + 文本 8dp）。
                 modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 8.dp),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = skillSuggestions.isNotEmpty(),
+            enter = fadeIn(tween(140)),
+            exit = fadeOut(tween(100)),
+        ) {
+            AgentSkillCommandPalette(
+                suggestions = skillSuggestions,
+                onPick = { suggestion ->
+                    textFieldState.setTextAndPlaceCursorAtEnd("/" + suggestion.alias + " ")
+                },
             )
         }
 

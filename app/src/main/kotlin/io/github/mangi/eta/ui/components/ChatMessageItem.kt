@@ -100,6 +100,7 @@ import com.itos.coui.shape.CouiShape
 import com.itos.coui.theme.CouiTheme
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.model.AgentFileReferencePromptCodec
+import io.github.mangi.eta.agent.model.AgentSkillCommandPromptCodec
 import io.github.mangi.eta.agent.overlay.toolDisplayName
 import io.github.mangi.eta.data.model.AppearanceUiStyle
 import io.github.mangi.eta.ui.app.LocalUiStyle
@@ -335,7 +336,8 @@ private fun UserMessageBubble(
         }
     }
     val visiblePrompt = remember(message.content) {
-        AgentFileReferencePromptCodec.parse(message.content)
+        val parsed = AgentFileReferencePromptCodec.parse(message.content)
+        parsed.copy(request = AgentSkillCommandPromptCodec.strip(parsed.request))
     }
     val isDark = MiuixTheme.colorScheme.background.luminance() < 0.5f
     val overlayBubbleColor = if (isDark) {

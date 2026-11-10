@@ -18,6 +18,7 @@ import io.github.mangi.eta.agent.device.AgentFileReferenceGateway
 import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.agent.media.AgentImageCodec
 import io.github.mangi.eta.agent.model.AgentFileReference
+import io.github.mangi.eta.agent.skill.AgentSkillCommands
 import io.github.mangi.eta.agent.model.AgentFileReferenceKind
 import io.github.mangi.eta.agent.model.AgentFileReferencePolicy
 import io.github.mangi.eta.agent.model.AgentFileReferencePromptCodec
@@ -1376,7 +1377,9 @@ internal class AgentAppState(
         preserveCurrentDraft: Boolean = false,
     ) {
         val fileReferences = pendingFileReferences.map { it.reference }
-        val runtimePrompt = AgentFileReferencePromptCodec.format(prompt, fileReferences)
+        // 斜杠命令：/技能名 请求 → 内联技能正文（历史里由 compactForHistory 压成一行标记）
+        val expandedPrompt = AgentSkillCommands.expand(appContext, prompt) ?: prompt
+        val runtimePrompt = AgentFileReferencePromptCodec.format(expandedPrompt, fileReferences)
         val runId = "run-${UUID.randomUUID()}"
         val userMessage = UserMessageUi(
             id = editBoundary?.userMessage?.id ?: "user-$runId",
