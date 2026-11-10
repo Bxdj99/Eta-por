@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.SportsBar
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -191,6 +192,7 @@ internal fun ConversationPanePanel(
             categoryTick++
         }
     }
+    var showVirtualDisplayPanel by remember { mutableStateOf(false) }
     var moveTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var manageTarget by remember { mutableStateOf<CategorySection?>(null) }
     var renameTarget by remember { mutableStateOf<CategorySection?>(null) }
@@ -284,6 +286,7 @@ internal fun ConversationPanePanel(
                     )
                     Spacer(Modifier.height(ConversationPanelMetrics.DockVerticalPadding))
                     PaneDock(
+                        onOpenVirtualDisplay = { showVirtualDisplayPanel = true },
                         onOpenSettings = onOpenSettings,
                         onOpenModelProviders = onOpenModelProviders,
                         onOpenTools = onOpenTools,
@@ -400,6 +403,11 @@ internal fun ConversationPanePanel(
             onDismiss = { renameTarget = null },
         )
     }
+
+    VirtualDisplayPanelDialog(
+        visible = showVirtualDisplayPanel,
+        onDismiss = { showVirtualDisplayPanel = false },
+    )
 
     deleteTarget?.let { category ->
         ConversationCategoryDeleteDialog(
@@ -844,6 +852,7 @@ private fun EmptyConversations(isSearching: Boolean) {
 
 @Composable
 private fun PaneDock(
+    onOpenVirtualDisplay: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenModelProviders: () -> Unit,
     onOpenTools: () -> Unit,
@@ -896,6 +905,13 @@ private fun PaneDock(
             icon = Icons.Outlined.SportsBar,
             label = "角色",
             onClick = onOpenCharacters,
+            modifier = Modifier.weight(1f),
+        )
+        // 灵屏是 canvas 不是应用页面：这里直接开面板，能看状态、搬到主屏、关掉
+        DockEntry(
+            icon = Icons.Rounded.Layers,
+            label = "灵屏",
+            onClick = onOpenVirtualDisplay,
             modifier = Modifier.weight(1f),
         )
     }

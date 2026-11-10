@@ -92,6 +92,11 @@ internal object AgentTaskRunner {
                 return Outcome.Deferred("Runtime 服务不可用（绑定失败／模块进程未起）", 0)
         }
 
+        // root 探测是"每进程只探一次"的：定时任务在 runtime 进程里醒来时可能还没探过/探晚了，
+        // 这里显式再探一次，避免工具被当成无 root 而被裁掉。
+        runCatching { io.github.mangi.eta.agent.device.RootAccess.refresh(context).join() }
+        EtaTrace.log("task.root", "granted=${io.github.mangi.eta.agent.device.RootAccess.isGranted}")
+
         val config = RuntimeConfigRepository.currentRuntimeConfig()
         if (config == null || (!ProviderAuthModes.isOAuth(config.authMode) && config.apiKey.isBlank())) {
             val why = if (config == null) {

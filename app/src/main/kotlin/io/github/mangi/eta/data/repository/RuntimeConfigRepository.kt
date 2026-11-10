@@ -187,6 +187,14 @@ internal object RuntimeConfigRepository {
             contextWindow = model.effectiveContextWindow,
             autoCompactionEnabled = Prefs.isEnabled(Prefs.Keys.AGENT_AUTO_COMPACTION_ENABLED),
             subagentTools = Prefs.isEnabled(Prefs.Keys.AGENT_SUBAGENT_ENABLED),
+            // 工具开关必须在这里也带上：ModelConfig 的默认值是 terminalTools=false，
+            // 而这条路径是自动任务（以及其它非聊天入口）拿配置的唯一来源。
+            // 漏了就会表现为"自动任务上下文里没有 shell、也没有文件工具"（真机复现过）。
+            terminalTools = Prefs.isEnabled(Prefs.Keys.AGENT_TERMINAL_TOOLS),
+            browserTools = Prefs.isEnabled(Prefs.Keys.AGENT_BROWSER_TOOLS),
+            deviceDirectTools = Prefs.isEnabled(Prefs.Keys.AGENT_DEVICE_DIRECT_TOOLS),
+            deviceSensitiveReadTools = Prefs.isEnabled(Prefs.Keys.AGENT_DEVICE_SENSITIVE_READ_TOOLS),
+            deviceSensitiveActionTools = Prefs.isEnabled(Prefs.Keys.AGENT_DEVICE_SENSITIVE_ACTION_TOOLS),
             systemPrompt = systemPrompt,
             anthropicVersion = (provider as? AnthropicProviderSetting)?.anthropicVersion
                 ?: AnthropicProviderSetting.DEFAULT_ANTHROPIC_VERSION,

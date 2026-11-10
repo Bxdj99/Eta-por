@@ -735,6 +735,17 @@ internal object VirtualDisplayController {
     @Volatile
     private var graceRelease: Runnable? = null
 
+    /** 用户主动关闭灵屏：跳过宽限，立刻拆屏。 */
+    fun closeNow(
+        context: Context? = null,
+        rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    ) {
+        cancelGraceRelease()
+        releaseScreenWake()
+        releaseSession(context?.applicationContext, rootAvailable)
+        io.github.mangi.eta.core.EtaTrace.log("vscr.keep", "用户主动关闭灵屏")
+    }
+
     private fun cancelGraceRelease() {
         graceRelease?.let { graceHandler.removeCallbacks(it) }
         graceRelease = null
