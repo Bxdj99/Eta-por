@@ -446,12 +446,27 @@ internal fun MarkdownFileDialog(
                         )
                     },
             ) {
-                // 移植备注：3.4.1 的 StaticMarkdown 还没有 codeWrap / onTaskToggle，
-                // 代码折行与清单勾选回写等渲染层参数随 UI 打磨轮一起补。
+                // 预览里的任务项可以点：改内存文本 + 立刻落盘，写不进去就留 dirty，关闭时再试一次。
+                val onToggleTask: (Int) -> Unit = { offset ->
+                    val next = toggleTaskAt(text, offset)
+                    if (next != text) {
+                        text = next
+                        dirty = true
+                        scope.launch {
+                            val error = withContext(Dispatchers.IO) { writeMarkdownFile(context, path, next) }
+                            if (error == null) {
+                                dirty = false
+                            } else {
+                                Toast.makeText(context, "保存失败：$error", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
                 StaticMarkdown(
                     content = text,
                     tone = MarkdownTone.Answer,
                     modifier = Modifier.fillMaxWidth(),
+                    onTaskToggle = onToggleTask,
                 )
             }
         }
