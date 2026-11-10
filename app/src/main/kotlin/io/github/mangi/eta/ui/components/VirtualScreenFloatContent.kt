@@ -5,12 +5,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,48 +48,56 @@ import io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.abs
 import kotlin.math.hypot
 
-/** 悬浮窗需要宿主窗口做的事（由 AgentRuntimeService 实现，负责改 WindowManager 参数）。 */
+/** 悬浮窗宿主：窗口参数由 AgentRuntimeService 改，Compose 只报意图。 */
 internal interface VirtualScreenFloatHost {
     fun moveBy(dx: Float, dy: Float)
-    fun resizeBy(scale: Float)
-    /** 松手后归一：贴边折叠、夹回屏内。 */
-    fun settle()
+
+    /** 双指捏合 / 双击切档用同一个入口：因子缩放（>1 变大）。 */
+    fun scaleBy(factor: Float)
+
+    /** 双击在固定档位间循环（fork 的 sizeTiersDp）。 */
+    fun cycleTier()
+
+    /** 拖动过程中或松手时贴边：贴到左右边缘就立刻收成气泡。 */
+    fun settle(snapNow: Boolean)
+
     fun setCollapsed(collapsed: Boolean)
+
     fun close()
+
     fun openFullscreen()
 }
 
 /**
- * 灵屏悬浮小窗（参照 Oo0520/Eta-por 的 VirtualScreenFloatWindow 手势分区）：
+ * 灵屏悬浮小窗（按 Oo0520/Eta-por 的 VirtualScreenFloatWindow 语义实现）：
  *
- * - **上边缘中间**（30dp 内、水平居中 60%）：拖动窗口
- * - **四角**（30dp 方区）：等比缩放，最小 120dp、自动夹屏
- * - **下边缘中间**：点一下浮出「关闭」胶囊，再点才真的关
- * - **其余内容区**：点击/长按/滑动直接注入灵屏
- * - **双击内容区**：进全屏查看器
- * - 拖到屏幕左右边缘松手：吸附折叠成细条，点一下展开
+ * - **无标题栏**：窗口即画面；顶部中间一条 28dp 的拖动条（三个点）负责移动窗口，
+ *   长按拖动条 550ms 弹出操作条（全屏 / 关闭）
+ * - **拖动即贴边**：拖到左右边缘的瞬间就收成气泡（fork 的 collapseIfAtEdge），不用等松手
+ * - **双击**：在 96 / 144 / 200 / 272 dp 四档间循环（fork 的 cycleSizeTier，双击不是全屏）
+ * - **双指捏合**：自由缩放，72–420dp
+ * - **其余区域**：点击 / 长按 / 滑动注入灵屏
+ * - **气泡态**：点击展开、拖动可移动
  */
 @Composable
-internal fun VirtualScreenFloatContent(
-    host: VirtualScreenFloatHost,
-) {
+internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val snapshot by VirtualDisplayController.snapshots.collectAsState()
     val active = snapshot.active && CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
-    var closeArmed by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(false) }
+    var actionsOpen by remember { mutableStateOf(false) }
     val viewport = remember(boxSize, snapshot.width, snapshot.height) {
         VirtualScreenViewport.fit(boxSize.width, boxSize.height, snapshot.width, snapshot.height)
     }
+    val handleHeight = with(density) { 28.dp.toPx() }
 
     fun normalized(x: Float, y: Float, clamp: Boolean = false): Pair<Float, Float>? {
         val vp = viewport ?: return null
@@ -96,29 +107,7 @@ internal fun VirtualScreenFloatContent(
         return nx.coerceIn(0f, 1f) to ny.coerceIn(0f, 1f)
     }
 
-    fun injectTap(point: Offset, longPress: Boolean) {
-        val p = normalized(point.x, point.y) ?: return
-        scope.launch(Dispatchers.IO) {
-            runCatching { VirtualDisplayController.dispatchUserTapOnCanvas(p.first, p.second, longPress) }
-        }
-    }
-
-    fun injectSwipe(from: Offset, to: Offset, durationMs: Int) {
-        val a = normalized(from.x, from.y, clamp = true) ?: return
-        val b = normalized(to.x, to.y, clamp = true) ?: return
-        scope.launch(Dispatchers.IO) {
-            runCatching {
-                VirtualDisplayController.dispatchUserSwipeOnCanvas(
-                    a.first, a.second, b.first, b.second, durationMs.coerceAtMost(2000),
-                )
-            }
-        }
-    }
-
-    val edgePx = with(density) { EdgeZoneDp.dp.toPx() }
-
     if (collapsed) {
-        // 折叠态：一条窄条，点一下展开，长按可关
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -139,7 +128,7 @@ internal fun VirtualScreenFloatContent(
             Icon(
                 imageVector = Icons.Rounded.OpenInFull,
                 contentDescription = "展开灵屏悬浮窗",
-                tint = Color.White.copy(alpha = 0.7f),
+                tint = Color.White.copy(alpha = 0.75f),
                 modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.weight(1f))
@@ -147,135 +136,94 @@ internal fun VirtualScreenFloatContent(
         return
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(Color(0xF21A1B1E)),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.06f))
-                .padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = if (active) {
-                    snapshot.appName.ifBlank { snapshot.packageName.ifBlank { "灵屏" } }
-                } else {
-                    "灵屏未运行"
-                },
-                style = MiuixTheme.textStyles.footnote2,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = host::openFullscreen, minWidth = 26.dp, minHeight = 26.dp) {
-                Icon(
-                    imageVector = Icons.Rounded.OpenInFull,
-                    contentDescription = "全屏查看",
-                    tint = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(15.dp),
-                )
-            }
-            IconButton(onClick = host::close, minWidth = 26.dp, minHeight = 26.dp) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "关闭悬浮窗",
-                    tint = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(15.dp),
-                )
-            }
-        }
-
+        // 画面 + 内容区手势（注入灵屏）
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { boxSize = it }
-                .pointerInput(viewport, active, closeArmed) {
+                .pointerInput(viewport, active) {
                     val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
                     val longPressTimeout = android.view.ViewConfiguration.getLongPressTimeout()
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        val startPos = down.position
-                        val zone = zoneOf(startPos, size.width.toFloat(), size.height.toFloat(), edgePx)
+                        if (down.position.y <= handleHeight) return@awaitEachGesture
                         val startedAt = down.uptimeMillis
-                        var last = startPos
-                        var total = Offset.Zero
+                        var last = down.position
                         var aborted = false
                         while (true) {
                             val event = awaitPointerEvent()
-                            if (zone != Zone.Content && event.changes.size > 1) {
-                                aborted = true
-                                break
-                            }
-                            if (zone == Zone.Content && event.changes.size > 1) {
+                            if (event.changes.size > 1) {
                                 aborted = true
                                 break
                             }
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            total += change.position - change.previousPosition
-                            change.consume()
                             last = change.position
-                            // 拖动/缩放实时跟随，不等抬手
-                            when (zone) {
-                                Zone.Drag -> if (change.previousPosition != change.position) {
-                                    host.moveBy(
-                                        change.position.x - change.previousPosition.x,
-                                        change.position.y - change.previousPosition.y,
-                                    )
-                                }
-                                Zone.Corner -> {
-                                    val delta = (change.position - change.previousPosition)
-                                    val grow = (delta.x + delta.y) / 220f
-                                    if (abs(grow) > 0.001f) host.resizeBy(1f + grow)
-                                }
-                                else -> Unit
-                            }
                             if (!change.pressed) break
                         }
-                        if (aborted) return@awaitEachGesture
+                        if (aborted || !active) return@awaitEachGesture
                         val duration = (android.os.SystemClock.uptimeMillis() - startedAt)
                             .toInt().coerceIn(60, 3000)
-                        when (zone) {
-                            Zone.Drag, Zone.Corner -> {
-                                if (total.getDistance() > slop) host.settle()
+                        val moved = hypot(
+                            (last.x - down.position.x).toDouble(),
+                            (last.y - down.position.y).toDouble(),
+                        ) > slop
+                        if (moved) {
+                            val a = normalized(down.position.x, down.position.y, clamp = true)
+                            val b = normalized(last.x, last.y, clamp = true)
+                            if (a != null && b != null) {
+                                scope.launch(Dispatchers.IO) {
+                                    runCatching {
+                                        VirtualDisplayController.dispatchUserSwipeOnCanvas(
+                                            a.first, a.second, b.first, b.second,
+                                            duration.coerceAtMost(2000),
+                                        )
+                                    }
+                                }
                             }
-                            Zone.Close -> {
-                                if (total.getDistance() <= slop) closeArmed = true
-                            }
-                            Zone.Content -> {
-                                if (!active) return@awaitEachGesture
-                                val moved = hypot(
-                                    (last.x - startPos.x).toDouble(),
-                                    (last.y - startPos.y).toDouble(),
-                                ) > slop
-                                if (moved) {
-                                    injectSwipe(startPos, last, duration)
-                                } else {
-                                    injectTap(startPos, longPress = duration >= longPressTimeout)
+                        } else {
+                            val p = normalized(down.position.x, down.position.y) ?: return@awaitEachGesture
+                            val longPress = duration >= longPressTimeout
+                            scope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    VirtualDisplayController.dispatchUserTapOnCanvas(p.first, p.second, longPress)
                                 }
                             }
                         }
                     }
                 }
+                // 双击切档；双指捏合缩放
                 .pointerInput(Unit) {
-                    // 双击内容区 → 全屏查看器
                     var lastTapAt = 0L
+                    var lastTap: Offset? = null
                     detectTapGestures(
                         onTap = { offset ->
+                            if (offset.y <= handleHeight) return@detectTapGestures
+                            actionsOpen = false
                             val now = android.os.SystemClock.uptimeMillis()
-                            val inContent = zoneOf(offset, 1f, 1f, 0f) == Zone.Content
-                            if (inContent && now - lastTapAt < 280L) {
+                            val prev = lastTap
+                            if (prev != null && now - lastTapAt < 300L &&
+                                (prev - offset).getDistance() < with(density) { 20.dp.toPx() }
+                            ) {
+                                lastTap = null
                                 lastTapAt = 0L
-                                host.openFullscreen()
+                                host.cycleTier()
                             } else {
+                                lastTap = offset
                                 lastTapAt = now
                             }
                         },
                     )
+                }
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, _, zoom, _ ->
+                        if (abs(zoom - 1f) > 0.01f) host.scaleBy(zoom)
+                    }
                 },
             contentAlignment = Alignment.Center,
         ) {
@@ -294,47 +242,126 @@ internal fun VirtualScreenFloatContent(
                     style = MiuixTheme.textStyles.footnote2,
                 )
             }
-            // 下边缘中间：关闭胶囊（点一下浮出，再点才关）
-            if (closeArmed) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 8.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.72f))
-                        .pointerInput(Unit) {
-                            detectTapGestures(onTap = { host.close() })
+        }
+
+        // 顶部中间：拖动条（三个点）。拖动=移动窗口，拖动中贴边即收气泡；长按=操作条
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(0.6f)
+                .height(28.dp)
+                .pointerInput(Unit) {
+                    var longPressed = false
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        longPressed = false
+                        val startedAt = down.uptimeMillis
+                        val startX = down.position.x
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.pressed) {
+                                val dx = change.position.x - change.previousPosition.x
+                                val dy = change.position.y - change.previousPosition.y
+                                if (dx != 0f || dy != 0f) {
+                                    host.moveBy(dx, dy)
+                                    // 拖动中贴边立即折叠（fork 的 collapseIfAtEdge）
+                                    host.settle(snapNow = true)
+                                }
+                                if (!longPressed &&
+                                    android.os.SystemClock.uptimeMillis() - startedAt >= 550L &&
+                                    (change.position - Offset(startX, down.position.y)).getDistance() < with(density) { 8.dp.toPx() }
+                                ) {
+                                    longPressed = true
+                                    actionsOpen = true
+                                }
+                            }
+                            if (!change.pressed) break
                         }
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                ) {
-                    Text(
-                        text = "关闭",
-                        color = Color.White,
-                        style = MiuixTheme.textStyles.footnote2,
+                        if (!longPressed) host.settle(snapNow = false)
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                repeat(3) {
+                    Box(
+                        modifier = Modifier
+                            .size(4.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.5f)),
                     )
                 }
             }
         }
+
+        // 长按拖动条弹出的操作条
+        if (actionsOpen) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 30.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.78f))
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .pointerInput(Unit) { detectTapGestures { host.openFullscreen() } }
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.OpenInFull,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("全屏", color = Color.White, style = MiuixTheme.textStyles.footnote2)
+                }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .pointerInput(Unit) { detectTapGestures { host.close() } }
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("关闭", color = Color.White, style = MiuixTheme.textStyles.footnote2)
+                }
+            }
+        }
+
+        // 顶部右侧：状态点（运行中绿、未运行灰）
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 8.dp, end = 8.dp)
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(if (active) Color(0xFF3FB98A) else Color.White.copy(alpha = 0.3f)),
+        )
+        if (!active) {
+            Text(
+                text = "灵屏未运行",
+                style = MiuixTheme.textStyles.footnote2,
+                color = Color.White.copy(alpha = 0.5f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 6.dp),
+            )
+        }
     }
-}
-
-private enum class Zone { Drag, Corner, Close, Content }
-
-private const val EdgeZoneDp = 30f
-
-/** 按命中点判定手势分区；尺寸用控件像素，边角阈值来自 30dp。 */
-private fun zoneOf(point: Offset, width: Float, height: Float, edgePx: Float): Zone {
-    if (width <= 0f || height <= 0f) return Zone.Content
-    val edge = if (edgePx > 0f) edgePx else 1f
-    // 四角：30dp 方区
-    val atLeft = point.x <= edge
-    val atRight = point.x >= width - edge
-    val atTop = point.y <= edge
-    val atBottom = point.y >= height - edge
-    if ((atLeft || atRight) && (atTop || atBottom)) return Zone.Corner
-    // 上边缘中间（水平居中 60%）：拖动
-    if (atTop && point.x in (width * 0.2f)..(width * 0.8f)) return Zone.Drag
-    // 下边缘中间：关闭胶囊
-    if (atBottom && point.x in (width * 0.2f)..(width * 0.8f)) return Zone.Close
-    return Zone.Content
 }

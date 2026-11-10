@@ -1368,7 +1368,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         )
     }
 
-    private val vsrcFloatCollapsedWidth by lazy { dpToPx(18) }
+    private val vsrcFloatCollapsedWidth by lazy { dpToPx(28) }
+
+    private var tierIndex = 2
+
 
     private val vsrcFloatMaxWidth by lazy { dpToPx(420) }
 
@@ -1389,50 +1392,47 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
-    /** 悬浮窗手势宿主：拖动 / 缩放 / 贴边折叠 / 关闭，全部落到 WindowManager 参数上。 */
+    /** 悬浮窗手势宿主：按 fork 的 VirtualScreenFloatWindow 语义操作窗口参数。 */
     private val vsrcFloatHost = object : io.github.mangi.eta.ui.components.VirtualScreenFloatHost {
         override fun moveBy(dx: Float, dy: Float) {
-            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "move dx=$dx dy=$dy")
             applyVsrcFloatParams { params ->
                 params.x += dx.toInt()
                 params.y += dy.toInt()
             }
         }
 
-        override fun resizeBy(scale: Float) {
-            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "resize scale=$scale")
-            val snapshot = virtualDisplayState.value
-            val aspect = if (snapshot.width > 0) {
-                snapshot.height.toFloat() / snapshot.width.toFloat()
-            } else {
-                2.1f
-            }
-            applyVsrcFloatParams { params ->
-                val next = (params.width * scale).toInt()
-                    .coerceIn(vsrcFloatMinWidth, vsrcFloatMaxWidth)
-                if (next != params.width) {
-                    params.width = next
-                    params.height = (next * aspect).toInt().coerceAtLeast(vsrcFloatMinWidth)
-                }
-            }
+        override fun scaleBy(factor: Float) {
+            val shortDp = vsrcShortSideDp()
+            val next = (shortDp * factor).coerceIn(FLOAT_MIN_DP, FLOAT_MAX_DP)
+            applyVsrcFloatSize(next)
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "scale factor=$factor short=${next}")
         }
 
-        override fun settle() {
+        override fun cycleTier() {
+            tierIndex = (tierIndex + 1) % FLOAT_TIERS_DP.size
+            applyVsrcFloatSize(FLOAT_TIERS_DP[tierIndex])
+            io.github.mangi.eta.core.EtaTrace.log(
+                "vscr.float",
+                "tier=$tierIndex short=${FLOAT_TIERS_DP[tierIndex]}",
+            )
+        }
+
+        override fun settle(snapNow: Boolean) {
             val bounds = vsrcScreenBounds()
             var collapsed = false
             applyVsrcFloatParams { params ->
                 params.y = params.y.coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
                 val maxX = (bounds.width() - params.width).coerceAtLeast(0)
                 params.x = params.x.coerceIn(0, maxX)
-                // 贴边吸附：真正贴到左/右边缘才折叠成细条（手册里那条判据）
+                // 贴到左右边缘就收气泡（拖动中 snapNow=true 时立即收，与 fork 的 collapseIfAtEdge 一致）
                 when {
-                    params.x <= 0 -> {
+                    params.x <= 1 -> {
                         params.x = 0
                         params.width = vsrcFloatCollapsedWidth
                         collapsed = true
                     }
 
-                    params.x >= maxX -> {
+                    params.x >= maxX - 1 -> {
                         params.x = maxX
                         params.width = vsrcFloatCollapsedWidth
                         collapsed = true
@@ -1441,24 +1441,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     else -> Unit
                 }
             }
-            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "settle collapsed=$collapsed")
+            if (collapsed) {
+                io.github.mangi.eta.core.EtaTrace.log("vscr.float", "settle collapsed snap=$snapNow")
+            }
         }
 
         override fun setCollapsed(collapsed: Boolean) {
-            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "setCollapsed $collapsed")
-            val snapshot = virtualDisplayState.value
-            val aspect = if (snapshot.width > 0) {
-                snapshot.height.toFloat() / snapshot.width.toFloat()
+            if (!collapsed) {
+                applyVsrcFloatSize(FLOAT_TIERS_DP[tierIndex])
             } else {
-                2.1f
-            }
-            applyVsrcFloatParams { params ->
-                if (collapsed) {
-                    params.width = vsrcFloatCollapsedWidth
-                } else {
-                    params.width = dpToPx(210)
-                    params.height = (params.width * aspect).toInt()
-                }
+                applyVsrcFloatParams { it.width = vsrcFloatCollapsedWidth }
             }
             io.github.mangi.eta.core.EtaTrace.log("vscr.float", "collapsed=$collapsed")
         }
@@ -1473,6 +1465,33 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
             }
+        }
+    }
+
+    /** 当前窗口短边（dp），用于捏合与切档。 */
+    private fun vsrcShortSideDp(): Float {
+        val params = vsrcFloatParams ?: return FLOAT_TIERS_DP[tierIndex]
+        val density = resources.displayMetrics.density.coerceAtLeast(1f)
+        return (minOf(params.width, params.height) / density).coerceAtLeast(FLOAT_MIN_DP)
+    }
+
+    /** 以"内容短边 dp"设窗口尺寸，长边按灵屏比例撑开。 */
+    private fun applyVsrcFloatSize(shortDp: Float) {
+        val snapshot = virtualDisplayState.value
+        val aspect = if (snapshot.width > 0 && snapshot.height > 0) {
+            snapshot.height.toFloat() / snapshot.width.toFloat()
+        } else {
+            2.17f
+        }
+        val density = resources.displayMetrics.density.coerceAtLeast(1f)
+        val shortPx = (shortDp * density).toInt().coerceAtLeast(1)
+        val longPx = (shortPx * aspect).toInt().coerceAtLeast(1)
+        val bounds = vsrcScreenBounds()
+        applyVsrcFloatParams { params ->
+            params.width = shortPx
+            params.height = longPx
+            params.x = params.x.coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
+            params.y = params.y.coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
         }
     }
 
@@ -1738,6 +1757,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ACTION_STOP_RUN = "io.github.mangi.eta.agent.runtime.STOP_RUN"
         const val ACTION_SHOW_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_SHOW"
         const val ACTION_HIDE_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_HIDE"
+
+        /** fork 的悬浮窗档位（内容短边 dp），双击在四档间循环。 */
+        private val FLOAT_TIERS_DP = floatArrayOf(96f, 144f, 200f, 272f)
+        private const val FLOAT_MIN_DP = 72f
+        private const val FLOAT_MAX_DP = 420f
 
         /** 打开灵屏悬浮小窗（由 App 内面板/查看器调用）。 */
         fun showVirtualScreenFloat(context: Context) {
