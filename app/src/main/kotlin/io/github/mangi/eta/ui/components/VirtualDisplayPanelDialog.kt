@@ -128,6 +128,7 @@ internal fun VirtualDisplayPanelDialog(
             TextButton(
                 text = "开悬浮小窗（没在跑也能先开着）",
                 onClick = {
+                    io.github.mangi.eta.core.EtaTrace.log("vscr.float", "panel click")
                     io.github.mangi.eta.agent.runtime.AgentRuntimeService
                         .showVirtualScreenFloat(context)
                     notice = "已开悬浮小窗"

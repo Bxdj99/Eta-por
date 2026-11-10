@@ -1322,7 +1322,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 灵屏悬浮小窗：贴屏幕右上，标题条拖动，内容区点/滑直接注入灵屏。 */
     private fun showVsrcFloat() {
         if (vsrcFloatView != null) return
-        val windowManager = getSystemService(WindowManager::class.java) ?: return
+        // 关键：TYPE_ACCESSIBILITY_OVERLAY 必须用无障碍服务的 WindowManager 添加，
+        // 用 Service 自己的 WindowManager 会抛 BadTokenException（上游注释里踩过这个坑）。
+        val addContext = overlayContext()
+        val windowManager = addContext.getSystemService(WindowManager::class.java) ?: run {
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "no WindowManager")
+            return
+        }
+        io.github.mangi.eta.core.EtaTrace.log(
+            "vscr.float",
+            "show type=${overlayType()} ctx=${addContext.javaClass.simpleName}",
+        )
         val view = createOverlayComposeView {
             io.github.mangi.eta.ui.components.VirtualScreenFloatContent(
                 onClose = { hideVsrcFloat() },
@@ -1361,16 +1371,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         runCatching { windowManager.addView(view, params) }.onFailure {
             AndroidAgentLogger.warn("virtual screen float window add failed: ${it.javaClass.simpleName}")
+            io.github.mangi.eta.core.EtaTrace.log(
+                "vscr.float",
+                "add_failed type=${it.javaClass.simpleName} msg=${it.message?.take(80)}",
+            )
             return
         }
         vsrcFloatView = view
         vsrcFloatParams = params
         AndroidAgentLogger.debug { "virtual screen float window shown" }
+        io.github.mangi.eta.core.EtaTrace.log("vscr.float", "shown w=${params.width} h=${params.height}")
     }
 
     private fun hideVsrcFloat() {
         val view = vsrcFloatView ?: return
-        runCatching { getSystemService(WindowManager::class.java)?.removeView(view) }
+        io.github.mangi.eta.core.EtaTrace.log("vscr.float", "hide")
+        runCatching {
+            overlayContext().getSystemService(WindowManager::class.java)?.removeView(view)
+        }
         vsrcFloatView = null
         vsrcFloatParams = null
     }
