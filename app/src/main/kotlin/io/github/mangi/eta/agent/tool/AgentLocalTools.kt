@@ -551,8 +551,21 @@ internal class AgentLocalTools(
                 "image=${observation.image?.bytes ?: 0} elapsed_ms=${SystemClock.elapsedRealtime() - startedAt} " +
                 "coordinate=${observation.coordinateSpace?.summary()}"
         }
+        // 不要节点树时给一句明确提示：虚拟屏里的应用同样能出节点，别靠像素猜。
+        val content = runCatching {
+            if (options.includeUiTree) return@runCatching observation.content
+            val json = JSONObject(observation.content)
+            if (!json.optBoolean("ok")) return@runCatching observation.content
+            json.put(
+                "hint",
+                "本次没有要界面树。虚拟屏里的应用一样有节点：要精确点击/输入时请再调用 " +
+                    "observe_screen(include_ui_tree=true)，然后用 tap_element / type_text / scroll_element，" +
+                    "比按截图估坐标稳。",
+            )
+            json.toString()
+        }.getOrDefault(observation.content)
         return AgentModelClient.ToolResult(
-            content = observation.content,
+            content = content,
             images = listOfNotNull(observation.image)
         )
     }

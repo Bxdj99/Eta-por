@@ -165,6 +165,13 @@ internal object VirtualDisplayController {
                     accepted = true
                 }
                 AndroidAgentLogger.info("Virtual display ready: displayId=$id size=${width}x$height")
+                // 建屏即量一次无障碍可见性：0 个窗口 = 这块屏对 a11y 是瞎的（后续节点动作都不可用）。
+                val flags = runCatching { manager.getDisplay(id)?.flags ?: 0 }.getOrDefault(0)
+                val a11yWindows = io.github.mangi.eta.agent.accessibility.AgentAccessibilityService.windowCountOnDisplay(id)
+                io.github.mangi.eta.core.EtaTrace.log(
+                    "vscr.create",
+                    "display=$id size=${width}x$height flags=0x${Integer.toHexString(flags)} a11yWindows=$a11yWindows",
+                )
                 return id
             } catch (exception: Exception) {
                 AndroidAgentLogger.warn("Virtual display creation failed: type=${exception.safeLogType()}")

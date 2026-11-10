@@ -2708,6 +2708,16 @@ class AgentAccessibilityService : AccessibilityService() {
         fun current(): AgentAccessibilityService? = instance
 
         fun isAvailable(): Boolean = instance != null
+
+        /**
+         * 指定 display 上无障碍能枚举到几个窗口；-1 表示服务没连上。
+         *
+         * 用来诊断"灵屏里到底瞎不瞎"：虚拟屏建好后立刻量一次，0 就是节点树断在这里，
+         * 不用等模型去 observe 再猜。
+         */
+        fun windowCountOnDisplay(displayId: Int): Int = runCatching {
+            instance?.windows?.count { it.displayId == displayId } ?: -1
+        }.getOrDefault(-1)
     }
 
     private sealed interface NodeValidation {
