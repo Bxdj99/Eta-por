@@ -291,7 +291,7 @@ internal fun VirtualDisplayViewer(
                             input = ""
                             textOpen = false
                             scope.launch(Dispatchers.IO) {
-                                runCatching { VirtualDisplayController.dispatchUserTextOnCanvas(payload) }
+                                runCatching { VirtualDisplayController.dispatchUserTextOnCanvas(payload, context) }
                             }
                         },
                     )

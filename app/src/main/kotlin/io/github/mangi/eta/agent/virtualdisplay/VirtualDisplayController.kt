@@ -691,18 +691,39 @@ internal object VirtualDisplayController {
     /** 用户从查看器里敲的字：交给 root 往虚拟屏输入（`input -d <id> text`）。 */
     fun dispatchUserTextOnCanvas(
         text: String,
+        context: Context? = null,
         rootAvailable: () -> Boolean = { RootAccess.isGranted },
     ) {
+        val clipboardContext = context?.applicationContext
         val payload = text.trim()
         if (payload.isEmpty()) return
         val snapshot = mutableSnapshots.value
         if (!snapshot.active || !CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)) return
-        if (!rootAvailable()) return
-        // input text 用 %s 表示空格，% 本身要转义
-        val encoded = payload.replace("%", "%%").replace(" ", "%s")
         thread(name = "eta-vd-user-text", isDaemon = true) {
+            // 首选无障碍：ACTION_SET_TEXT / ACTION_PASTE，中文与 emoji 都能进
+            val inserted = AgentAccessibilityService.current()
+                ?.inputTextFocused(payload, snapshot.displayId)
+                ?.ok == true
+            if (inserted) return@thread
+            if (!rootAvailable()) return@thread
             val exec = BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = rootAvailable)
             try {
+                // 次选：写剪贴板 + 粘键，仍然保留 Unicode
+                val copied = runCatching {
+                    val clipboard = clipboardContext
+                        ?.getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("eta-vd", payload))
+                    true
+                }.getOrDefault(false)
+                if (copied) {
+                    val pasted = exec.execute(
+                        "input -d ${snapshot.displayId} keyevent 279",
+                        timeoutMillis = 5_000L,
+                    ).exitCode == 0
+                    if (pasted) return@thread
+                }
+                // 最后手段：shell 输入，只认 ASCII
+                val encoded = payload.replace("%", "%%").replace(" ", "%s")
                 exec.execute(
                     "input -d ${snapshot.displayId} text ${DeviceToolContract.quote(encoded)}",
                     timeoutMillis = 5_000L,
