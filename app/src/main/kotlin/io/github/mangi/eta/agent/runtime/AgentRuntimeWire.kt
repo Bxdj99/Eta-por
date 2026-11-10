@@ -80,6 +80,10 @@ internal object AgentRuntimeWire {
 
     /** client -> service：重新订阅指定 run 的安全事件重放、实时事件和最终结果。 */
     const val MSG_ATTACH_RUN = 11
+    const val MSG_PAUSE = 16
+    const val MSG_RESUME = 17
+    const val MSG_STEER = 18
+    const val KEY_CONVERSATION_ID: String = "conversation_id"
 
     /** service -> client：返回是否成功重新订阅指定 run。 */
     const val MSG_ATTACH_RUN_RESPONSE = 12
@@ -95,7 +99,7 @@ internal object AgentRuntimeWire {
 
     private const val KEY_TYPE = "type"
     private const val KEY_RUN_ID = "run_id"
-    private const val KEY_PROMPT = "prompt"
+    const val KEY_PROMPT = "prompt"
     private const val KEY_ASSISTANT_SCREEN_CONTEXT = "assistant_screen_context"
     private const val KEY_MODEL_SESSION_ID = "model_session_id"
     private const val KEY_PROVIDER_ID = "provider_id"

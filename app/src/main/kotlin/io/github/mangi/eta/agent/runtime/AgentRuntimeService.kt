@@ -173,6 +173,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 流体云/仪表盘上的按钮走 PendingIntent.getService 进来，在这里落到运行时控制。
+        when (intent?.action) {
+            ACTION_PAUSE_RUN -> requestPause(intent.getStringExtra(EXTRA_RUN_ID))
+            ACTION_PAUSE_RUNS -> requestPause(null)
+            ACTION_RESUME_RUN -> requestResume()
+            ACTION_STOP_RUN -> intent.getStringExtra(EXTRA_RUN_ID)?.takeIf { it.isNotBlank() }?.let(::cancelRun)
+        }
         if (intent?.action != ACTION_KEEP_ALIVE || runs.all().isEmpty()) {
             stopSelf(startId)
         }
@@ -249,6 +256,20 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                         return
                     }
                     ingestRunRequest(incoming, msg.replyTo, msg.sendingUid == android.os.Process.myUid())
+                }
+
+                AgentRuntimeWire.MSG_PAUSE -> {
+                    requestPause(msg.data?.let(AgentRuntimeWire::runIdFromBundle)?.takeIf { it.isNotBlank() })
+                }
+
+                AgentRuntimeWire.MSG_RESUME -> {
+                    requestResume()
+                }
+
+                AgentRuntimeWire.MSG_STEER -> {
+                    val text = msg.data?.getString(AgentRuntimeWire.KEY_PROMPT).orEmpty()
+                    val runId = msg.data?.let(AgentRuntimeWire::runIdFromBundle)?.takeIf { it.isNotBlank() }
+                    requestSupplement(runId ?: displayedRun?.runId, text)
                 }
 
                 AgentRuntimeWire.MSG_CANCEL -> {
@@ -1497,6 +1518,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         )
 
     companion object {
+        const val ACTION_PAUSE_RUN = "io.github.mangi.eta.agent.runtime.PAUSE_RUN"
+        const val ACTION_RESUME_RUN = "io.github.mangi.eta.agent.runtime.RESUME_RUN"
+        const val ACTION_PAUSE_RUNS = "io.github.mangi.eta.agent.runtime.PAUSE_RUNS"
+        const val ACTION_STOP_RUN = "io.github.mangi.eta.agent.runtime.STOP_RUN"
+        const val EXTRA_RUN_ID = "run_id"
         @Volatile
         private var activeInstance: AgentRuntimeService? = null
 

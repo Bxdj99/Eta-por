@@ -118,6 +118,38 @@ internal class AgentRuntimeClient(
         }
     }
 
+    /** 暂停指定 run（空 = 全部）。真正的暂停落在执行侧，这里只发指令。 */
+    fun pauseRun(runId: String = "") {
+        withRuntimeMessenger(Unit) { serviceMessenger ->
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_PAUSE)
+            if (runId.isNotBlank()) msg.data = AgentRuntimeWire.ackBundle(runId)
+            serviceMessenger.send(msg)
+        }
+    }
+
+    /** 恢复指定 run（空 = 全部）。 */
+    fun resumeRun(runId: String = "") {
+        withRuntimeMessenger(Unit) { serviceMessenger ->
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_RESUME)
+            if (runId.isNotBlank()) msg.data = AgentRuntimeWire.ackBundle(runId)
+            serviceMessenger.send(msg)
+        }
+    }
+
+    /** 运行中插话：下一个 turn 生效，不取消当前请求。 */
+    fun steerRun(text: String, conversationId: String = "") {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        withRuntimeMessenger(Unit) { serviceMessenger ->
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_STEER)
+            msg.data = Bundle().apply {
+                putString(AgentRuntimeWire.KEY_PROMPT, trimmed)
+                putString(AgentRuntimeWire.KEY_CONVERSATION_ID, conversationId)
+            }
+            serviceMessenger.send(msg)
+        }
+    }
+
     fun cancelRun(runId: String) {
         if (runId.isBlank()) return
         withRuntimeMessenger(Unit) { serviceMessenger ->
