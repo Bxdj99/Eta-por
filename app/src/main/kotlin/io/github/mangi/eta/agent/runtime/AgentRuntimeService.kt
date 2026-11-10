@@ -1334,30 +1334,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             "show type=${overlayType()} ctx=${addContext.javaClass.simpleName}",
         )
         val view = createOverlayComposeView {
-            io.github.mangi.eta.ui.components.VirtualScreenFloatContent(
-                onClose = { hideVsrcFloat() },
-                onOpenFullscreen = {
-                    hideVsrcFloat()
-                    runCatching {
-                        startActivity(
-                            Intent(this, MainActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    }
-                },
-                onDragBy = { dx, dy ->
-                    val params = vsrcFloatParams ?: return@VirtualScreenFloatContent
-                    params.x -= dx.toInt()
-                    params.y += dy.toInt()
-                    val target = vsrcFloatView ?: return@VirtualScreenFloatContent
-                    runCatching {
-                        getSystemService(WindowManager::class.java)?.updateViewLayout(target, params)
-                    }
-                },
-            )
+            io.github.mangi.eta.ui.components.VirtualScreenFloatContent(host = vsrcFloatHost)
         }
+        val paramsWidth = dpToPx(210)
         val params = WindowManager.LayoutParams(
-            dpToPx(210),
+            paramsWidth,
             dpToPx(400),
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -1365,8 +1346,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = dpToPx(8)
+            gravity = Gravity.TOP or Gravity.LEFT
+            val bounds = vsrcScreenBounds()
+            x = (bounds.width() - paramsWidth - dpToPx(8)).coerceAtLeast(0)
             y = dpToPx(160)
         }
         runCatching { windowManager.addView(view, params) }.onFailure {
@@ -1380,7 +1362,118 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         vsrcFloatView = view
         vsrcFloatParams = params
         AndroidAgentLogger.debug { "virtual screen float window shown" }
-        io.github.mangi.eta.core.EtaTrace.log("vscr.float", "shown w=${params.width} h=${params.height}")
+        io.github.mangi.eta.core.EtaTrace.log(
+            "vscr.float",
+            "shown w=${params.width} h=${params.height} x=${params.x} y=${params.y} gravity=${params.gravity}",
+        )
+    }
+
+    private val vsrcFloatCollapsedWidth by lazy { dpToPx(18) }
+
+    private val vsrcFloatMaxWidth by lazy { dpToPx(420) }
+
+    private val vsrcFloatMinWidth by lazy { dpToPx(120) }
+
+    private fun vsrcScreenBounds(): android.graphics.Rect = runCatching {
+        overlayContext().getSystemService(WindowManager::class.java)
+            ?.currentWindowMetrics?.bounds
+    }.getOrNull() ?: android.graphics.Rect(0, 0, 1440, 3136)
+
+    private fun applyVsrcFloatParams(mutate: (WindowManager.LayoutParams) -> Unit) {
+        val params = vsrcFloatParams ?: return
+        val view = vsrcFloatView ?: return
+        mutate(params)
+        runCatching {
+            overlayContext().getSystemService(WindowManager::class.java)
+                ?.updateViewLayout(view, params)
+        }
+    }
+
+    /** 悬浮窗手势宿主：拖动 / 缩放 / 贴边折叠 / 关闭，全部落到 WindowManager 参数上。 */
+    private val vsrcFloatHost = object : io.github.mangi.eta.ui.components.VirtualScreenFloatHost {
+        override fun moveBy(dx: Float, dy: Float) {
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "move dx=$dx dy=$dy")
+            applyVsrcFloatParams { params ->
+                params.x += dx.toInt()
+                params.y += dy.toInt()
+            }
+        }
+
+        override fun resizeBy(scale: Float) {
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "resize scale=$scale")
+            val snapshot = virtualDisplayState.value
+            val aspect = if (snapshot.width > 0) {
+                snapshot.height.toFloat() / snapshot.width.toFloat()
+            } else {
+                2.1f
+            }
+            applyVsrcFloatParams { params ->
+                val next = (params.width * scale).toInt()
+                    .coerceIn(vsrcFloatMinWidth, vsrcFloatMaxWidth)
+                if (next != params.width) {
+                    params.width = next
+                    params.height = (next * aspect).toInt().coerceAtLeast(vsrcFloatMinWidth)
+                }
+            }
+        }
+
+        override fun settle() {
+            val bounds = vsrcScreenBounds()
+            var collapsed = false
+            applyVsrcFloatParams { params ->
+                params.y = params.y.coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
+                val maxX = (bounds.width() - params.width).coerceAtLeast(0)
+                params.x = params.x.coerceIn(0, maxX)
+                // 贴边吸附：真正贴到左/右边缘才折叠成细条（手册里那条判据）
+                when {
+                    params.x <= 0 -> {
+                        params.x = 0
+                        params.width = vsrcFloatCollapsedWidth
+                        collapsed = true
+                    }
+
+                    params.x >= maxX -> {
+                        params.x = maxX
+                        params.width = vsrcFloatCollapsedWidth
+                        collapsed = true
+                    }
+
+                    else -> Unit
+                }
+            }
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "settle collapsed=$collapsed")
+        }
+
+        override fun setCollapsed(collapsed: Boolean) {
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "setCollapsed $collapsed")
+            val snapshot = virtualDisplayState.value
+            val aspect = if (snapshot.width > 0) {
+                snapshot.height.toFloat() / snapshot.width.toFloat()
+            } else {
+                2.1f
+            }
+            applyVsrcFloatParams { params ->
+                if (collapsed) {
+                    params.width = vsrcFloatCollapsedWidth
+                } else {
+                    params.width = dpToPx(210)
+                    params.height = (params.width * aspect).toInt()
+                }
+            }
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "collapsed=$collapsed")
+        }
+
+        override fun close() = hideVsrcFloat()
+
+        override fun openFullscreen() {
+            hideVsrcFloat()
+            runCatching {
+                startActivity(
+                    Intent(this@AgentRuntimeService, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
     }
 
     private fun hideVsrcFloat() {
