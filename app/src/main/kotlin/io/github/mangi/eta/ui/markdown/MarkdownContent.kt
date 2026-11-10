@@ -2,6 +2,7 @@ package io.github.mangi.eta.ui.markdown
 
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,7 +21,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.automirrored.rounded.ArrowRightAlt
 import androidx.compose.material.icons.rounded.CheckBox
+import androidx.compose.material.icons.rounded.WrapText
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Feedback
@@ -86,8 +89,14 @@ internal fun MarkdownContent(
     style: MarkdownStyle,
     modifier: Modifier = Modifier,
     reveal: SmoothTextRevealCoordinator? = null,
+    /** 任务列表勾选回写（传源码偏移）；null 表示只读。 */
+    onTaskToggle: ((Int) -> Unit)? = null,
+    /** 代码块默认是否折行；聊天里不折行 + 横向滚动，逐块仍可手动切换。 */
+    codeWrap: Boolean = false,
 ) {
-    val scope = remember(style, reveal) { MarkdownRenderScope(style, reveal) }
+    val scope = remember(style, reveal, onTaskToggle, codeWrap) {
+        MarkdownRenderScope(style, reveal, onTaskToggle, codeWrap)
+    }
     MarkdownBlockColumn(blocks = document.blocks, scope = scope, compact = false, modifier = modifier)
 }
 
@@ -162,8 +171,10 @@ internal fun LazyMarkdownContent(
 private class MarkdownRenderScope(
     val style: MarkdownStyle,
     val reveal: SmoothTextRevealCoordinator?,
+    val onTaskToggle: ((Int) -> Unit)? = null,
+    val codeWrap: Boolean = false,
 ) {
-    fun muted() = MarkdownRenderScope(style.muted(), reveal)
+    fun muted() = MarkdownRenderScope(style.muted(), reveal, onTaskToggle, codeWrap)
 }
 
 /** 嵌套列表的层级只影响 marker 字形，用 CompositionLocal 传递，块组件不必逐层转发。 */
@@ -250,6 +261,8 @@ private fun MarkdownText(
 @Composable
 private fun MarkdownCodeBlock(block: MarkdownCode, scope: MarkdownRenderScope) {
     val style = scope.style
+    // 折行开关：默认沿用调用方设置，可逐块切换，语言与内容变化时重置。
+    var wrap by remember(block.text.text, block.language) { mutableStateOf(scope.codeWrap) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -269,16 +282,28 @@ private fun MarkdownCodeBlock(block: MarkdownCode, scope: MarkdownRenderScope) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            IconButton(
+                onClick = { wrap = !wrap },
+                minWidth = 30.dp,
+                minHeight = 30.dp,
+            ) {
+                Icon(
+                    imageVector = if (wrap) Icons.Rounded.WrapText else Icons.AutoMirrored.Rounded.ArrowRightAlt,
+                    contentDescription = if (wrap) "取消折行" else "折行显示",
+                    modifier = Modifier.size(16.dp),
+                    tint = if (wrap) MiuixTheme.colorScheme.primary else style.secondaryColor,
+                )
+            }
             CopyButton(text = block.text.text, tint = style.secondaryColor)
         }
-        // 代码不折行，长行横向滚动，保留缩进与对齐。
+        // 默认不折行 + 横向滚动（保留缩进对齐）；点右上角开关后按容器宽度折行。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
+                .then(if (wrap) Modifier else Modifier.horizontalScroll(rememberScrollState()))
                 .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
         ) {
-            MarkdownText(block, style.code, scope, softWrap = false)
+            MarkdownText(block, style.code, scope, softWrap = wrap)
         }
     }
 }
@@ -475,7 +500,13 @@ private fun RowScope.ListMarker(
     when {
         item.checked != null -> {
             val lineHeight = with(LocalDensity.current) { style.body.lineHeight.toDp() }
-            Box(markerModifier.height(lineHeight), contentAlignment = Alignment.Center) {
+            val toggle = scope.onTaskToggle
+            Box(
+                markerModifier
+                    .height(lineHeight)
+                    .then(if (toggle != null) Modifier.clickable { toggle(item.offset) } else Modifier),
+                contentAlignment = Alignment.Center,
+            ) {
                 Icon(
                     imageVector = if (item.checked) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
                     contentDescription = null,

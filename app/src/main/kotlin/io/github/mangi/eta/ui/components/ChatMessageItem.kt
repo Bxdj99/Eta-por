@@ -104,6 +104,7 @@ import io.github.mangi.eta.agent.model.AgentSkillCommandPromptCodec
 import io.github.mangi.eta.agent.overlay.toolDisplayName
 import io.github.mangi.eta.data.model.AppearanceUiStyle
 import io.github.mangi.eta.ui.app.LocalUiStyle
+import io.github.mangi.eta.ui.markdown.MarkdownTaskToggleBridge
 import io.github.mangi.eta.ui.markdown.MarkdownTone
 import io.github.mangi.eta.ui.markdown.StaticMarkdown
 import io.github.mangi.eta.ui.markdown.StreamingMarkdown
@@ -657,6 +658,7 @@ private fun AgentMessageBlock(
     onSelectCandidate: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val taskToggle = MarkdownTaskToggleBridge.handler
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
@@ -726,6 +728,7 @@ private fun AgentMessageBlock(
                         tone = MarkdownTone.Answer,
                         parsed = completedDocument,
                         modifier = Modifier.fillMaxWidth(),
+                        onTaskToggle = taskToggle?.let { toggle -> { offset -> toggle(message.id, offset) } },
                     )
                 }
             }

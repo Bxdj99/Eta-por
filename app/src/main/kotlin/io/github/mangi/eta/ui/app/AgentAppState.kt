@@ -54,6 +54,8 @@ import io.github.mangi.eta.data.repository.EtaBackupSummary
 import io.github.mangi.eta.data.repository.ProviderRepository
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.IncomingShareRequest
+import io.github.mangi.eta.ui.markdown.MarkdownTaskToggleBridge
+import io.github.mangi.eta.ui.markdown.toggleMarkdownTaskAt
 import io.github.mangi.eta.ui.model.AgentChatHomeUiState
 import io.github.mangi.eta.ui.model.AgentChatMessageUi
 import io.github.mangi.eta.ui.model.AgentMessageUi
@@ -164,6 +166,8 @@ internal class AgentAppState(
         private set
 
     init {
+        // 气泡里点任务清单勾选框 → 只改这条消息正文，不重跑模型
+        MarkdownTaskToggleBridge.handler = { messageId, offset -> toggleMessageTask(messageId, offset) }
         refreshConversationSummaries()
         observeRuntimeSelection()
         runtimeRecoveryInProgress.set(true)
@@ -1245,6 +1249,31 @@ internal class AgentAppState(
         if (nextState !== homeState) {
             updateCurrentConversation(nextState, updateTimestamp = false)
         }
+    }
+
+    /**
+     * 气泡里勾选任务清单：把那条消息正文里对应行的 `[ ]`/`[x]` 翻面并落库。
+     * 不触发模型重跑，也不改历史消息栈（历史里是当时的快照）。
+     */
+    fun toggleMessageTask(messageId: String, sourceOffset: Int) {
+        if (homeState.isStreaming || homeState.roleplay != null) return
+        val message = homeState.messages.firstOrNull { it.id == messageId } ?: return
+        val content = when (message) {
+            is UserMessageUi -> message.content
+            is AgentMessageUi -> message.content
+            else -> return
+        }
+        val updated = toggleMarkdownTaskAt(content, sourceOffset) ?: return
+        val messages = homeState.messages.map { item ->
+            when {
+                item.id != messageId -> item
+                item is UserMessageUi -> item.copy(content = updated)
+                item is AgentMessageUi -> item.copy(content = updated)
+                else -> item
+            }
+        }
+        updateCurrentConversation(homeState.copy(messages = messages))
+        persistConversations()
     }
 
     private fun submitOrQueueCurrentMessage(
