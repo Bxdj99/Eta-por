@@ -688,6 +688,31 @@ internal object VirtualDisplayController {
         }
     }
 
+    /** 用户从查看器里敲的字：交给 root 往虚拟屏输入（`input -d <id> text`）。 */
+    fun dispatchUserTextOnCanvas(
+        text: String,
+        rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    ) {
+        val payload = text.trim()
+        if (payload.isEmpty()) return
+        val snapshot = mutableSnapshots.value
+        if (!snapshot.active || !CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)) return
+        if (!rootAvailable()) return
+        // input text 用 %s 表示空格，% 本身要转义
+        val encoded = payload.replace("%", "%%").replace(" ", "%s")
+        thread(name = "eta-vd-user-text", isDaemon = true) {
+            val exec = BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = rootAvailable)
+            try {
+                exec.execute(
+                    "input -d ${snapshot.displayId} text ${DeviceToolContract.quote(encoded)}",
+                    timeoutMillis = 5_000L,
+                )
+            } finally {
+                exec.close()
+            }
+        }
+    }
+
     fun dispatchUserSwipeOnCanvas(
         startX: Float,
         startY: Float,

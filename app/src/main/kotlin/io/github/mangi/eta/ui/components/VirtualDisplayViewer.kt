@@ -4,6 +4,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,6 +71,7 @@ internal fun VirtualDisplayViewer(
     val active = snapshot.active && CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var textOpen by remember { mutableStateOf(false) }
     val viewport = remember(canvasSize, snapshot.width, snapshot.height) {
         VirtualScreenViewport.fit(
             canvasSize.width,
@@ -144,6 +148,19 @@ internal fun VirtualDisplayViewer(
                     )
                 }
                 IconButton(
+                    onClick = { textOpen = true },
+                    minWidth = 36.dp,
+                    minHeight = 36.dp,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Keyboard,
+                        contentDescription = "输入文字",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                IconButton(
                     onClick = {
                         scope.launch(Dispatchers.IO) {
                             val ok = runCatching { VirtualDisplayController.handoffToMainDisplay(context) }
@@ -180,38 +197,53 @@ internal fun VirtualDisplayViewer(
                     .fillMaxSize()
                     .onSizeChanged { canvasSize = it }
                     .pointerInput(viewport) {
-                        detectTapGestures(
-                            onTap = { offset -> injectTap(offset.x, offset.y, false) },
-                            onLongPress = { offset -> injectTap(offset.x, offset.y, true) },
-                        )
-                    }
-                    .pointerInput(viewport) {
-                        var start = Offset.Zero
-                        var total = Offset.Zero
-                        detectDragGestures(
-                            onDragStart = { start = it; total = Offset.Zero },
-                            onDrag = { change, delta ->
-                                change.consume()
-                                total += delta
-                            },
-                            onDragEnd = {
-                                val from = normalized(start.x, start.y, clamp = true)
-                                val to = normalized(
-                                    start.x + total.x,
-                                    start.y + total.y,
-                                    clamp = true,
-                                )
+                        // 参考 fork 的 TakeoverHostView：按下/抬起两端做判定，
+                        // 滑动时长用真实 eventTime 差，长按在抬起时按时长判定，比 tap/drag 两个检测器打架更稳。
+                        val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+                        val longPressTimeout = android.view.ViewConfiguration.getLongPressTimeout()
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val startedAt = down.uptimeMillis
+                            var last = down.position
+                            var aborted = false
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.size > 1) {
+                                    aborted = true
+                                    break
+                                }
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                last = change.position
+                                if (!change.pressed) break
+                            }
+                            if (aborted) return@awaitEachGesture
+                            val duration = (android.os.SystemClock.uptimeMillis() - startedAt)
+                                .toInt().coerceIn(60, 3000)
+                            val moved = kotlin.math.hypot(
+                                (last.x - down.position.x).toDouble(),
+                                (last.y - down.position.y).toDouble(),
+                            ) > slop
+                            if (moved) {
+                                val from = normalized(down.position.x, down.position.y, clamp = true)
+                                val to = normalized(last.x, last.y, clamp = true)
                                 if (from != null && to != null) {
                                     scope.launch(Dispatchers.IO) {
                                         runCatching {
                                             VirtualDisplayController.dispatchUserSwipeOnCanvas(
-                                                from.first, from.second, to.first, to.second, 320,
+                                                from.first, from.second, to.first, to.second,
+                                                duration.coerceAtMost(2000),
                                             )
                                         }
                                     }
                                 }
-                            },
-                        )
+                            } else {
+                                injectTap(
+                                    down.position.x,
+                                    down.position.y,
+                                    longPress = duration >= longPressTimeout,
+                                )
+                            }
+                        }
                     },
                 contentAlignment = Alignment.Center,
             ) {
@@ -228,6 +260,40 @@ internal fun VirtualDisplayViewer(
                         text = "正在取帧…",
                         color = Color.White.copy(alpha = 0.7f),
                         style = MiuixTheme.textStyles.footnote1,
+                    )
+                }
+            }
+            if (textOpen) {
+                var input by remember { mutableStateOf("") }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        singleLine = true,
+                        textStyle = MiuixTheme.textStyles.body1.copy(color = Color.White),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White),
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    top.yukonga.miuix.kmp.basic.TextButton(
+                        text = "发送",
+                        minWidth = 0.dp,
+                        onClick = {
+                            val payload = input
+                            input = ""
+                            textOpen = false
+                            scope.launch(Dispatchers.IO) {
+                                runCatching { VirtualDisplayController.dispatchUserTextOnCanvas(payload) }
+                            }
+                        },
                     )
                 }
             }
