@@ -2718,6 +2718,23 @@ class AgentAccessibilityService : AccessibilityService() {
         fun windowCountOnDisplay(displayId: Int): Int = runCatching {
             instance?.windows?.count { it.displayId == displayId } ?: -1
         }.getOrDefault(-1)
+
+        /**
+         * 一行诊断串：各显示屏上有几个窗口，目标屏上的窗口类型/焦点/包名。
+         * 形如 `all={0=3,45=1} target=[t2 f1 a1 com.tencent.mm]`，用于定位"灵屏里 a11y 为什么瞎"。
+         */
+        fun windowDebugSummary(displayId: Int): String = runCatching {
+            val service = instance ?: return@runCatching "unavailable"
+            val windows = service.windowsOnAllDisplays
+            val perDisplay = (0 until windows.size())
+                .associate { index -> windows.keyAt(index) to windows.valueAt(index).size }
+                .toSortedMap()
+            val target = windows[displayId].orEmpty().map { window ->
+                "t${window.type} f${if (window.isFocused) 1 else 0} a${if (window.isActive) 1 else 0} " +
+                    (window.root?.packageName?.toString() ?: "?")
+            }
+            "all=$perDisplay target=[${target.joinToString(" | ")}]"
+        }.getOrDefault("failed")
     }
 
     private sealed interface NodeValidation {

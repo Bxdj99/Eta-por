@@ -165,12 +165,17 @@ internal object VirtualDisplayController {
                     accepted = true
                 }
                 AndroidAgentLogger.info("Virtual display ready: displayId=$id size=${width}x$height")
+                keepScreenAwakeForDisplay(appContext)
                 // 建屏即量一次无障碍可见性：0 个窗口 = 这块屏对 a11y 是瞎的（后续节点动作都不可用）。
                 val flags = runCatching { manager.getDisplay(id)?.flags ?: 0 }.getOrDefault(0)
                 val a11yWindows = io.github.mangi.eta.agent.accessibility.AgentAccessibilityService.windowCountOnDisplay(id)
+                val interactive = runCatching {
+                    appContext.getSystemService(android.os.PowerManager::class.java)?.isInteractive
+                }.getOrNull()
                 io.github.mangi.eta.core.EtaTrace.log(
                     "vscr.create",
-                    "display=$id size=${width}x$height flags=0x${Integer.toHexString(flags)} a11yWindows=$a11yWindows",
+                    "display=$id size=${width}x$height flags=0x${Integer.toHexString(flags)} " +
+                        "interactive=$interactive a11yWindows=$a11yWindows",
                 )
                 return id
             } catch (exception: Exception) {
@@ -184,6 +189,41 @@ internal object VirtualDisplayController {
                     ).close()
                 }
             }
+        }
+    }
+
+    @Volatile
+    private var displayWakeLock: android.os.PowerManager.WakeLock? = null
+
+    /**
+     * 灵屏要"可交互"才能被无障碍枚举到窗口。
+     *
+     * 本机实测：设备一进 AOD/熄屏，虚拟屏（落在默认 display group）就不再产生交互窗口，
+     * a11y 的 windows 直接归零 —— 表现就是"截图有画面、observe_screen 节点为空、模型只能盲点坐标"。
+     * 所以灵屏会话存活期间持一把会点亮屏幕的唤醒锁，会话结束立刻放开。
+     */
+    private fun keepScreenAwakeForDisplay(context: Context) {
+        runCatching {
+            val power = context.getSystemService(android.os.PowerManager::class.java) ?: return
+            if (displayWakeLock?.isHeld == true) return
+            @Suppress("DEPRECATION")
+            val lock = power.newWakeLock(
+                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                    android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "Eta:vscr-screen",
+            )
+            lock.setReferenceCounted(false)
+            lock.acquire(15 * 60 * 1000L)
+            displayWakeLock = lock
+            io.github.mangi.eta.core.EtaTrace.log("vscr.screen", "acquire 点亮屏幕以保持灵屏可交互")
+        }.onFailure { AndroidAgentLogger.warn("Virtual display screen wake failed: ${it.javaClass.simpleName}") }
+    }
+
+    private fun releaseScreenWake() {
+        runCatching {
+            displayWakeLock?.let { if (it.isHeld) it.release() }
+            displayWakeLock = null
+            io.github.mangi.eta.core.EtaTrace.log("vscr.screen", "release 放开屏幕")
         }
     }
 
@@ -538,6 +578,7 @@ internal object VirtualDisplayController {
         rootAvailable: () -> Boolean,
         expected: VirtualDisplaySessionState.Token? = null,
     ) {
+        releaseScreenWake()
         val resources = synchronized(lock) {
             if (expected != null && !sessionState.isCurrent(expected)) return
             sessionState.invalidate()

@@ -541,7 +541,8 @@ internal class AgentLocalTools(
                 "canvas=${json.optString("canvas")} display=${json.optInt("display_id", -1)} " +
                     "a11y=${a11y?.optBoolean("available")} tree=${json.optString("ui_tree_status")} " +
                     "nodes=${observation.elementObservation?.nodes?.size ?: 0} " +
-                    "image=${observation.image?.bytes ?: 0} coordinate=${observation.coordinateSpace?.summary()}",
+                    "image=${observation.image?.bytes ?: 0} coordinate=${observation.coordinateSpace?.summary()} " +
+                    "a11y=${io.github.mangi.eta.agent.accessibility.AgentAccessibilityService.windowDebugSummary(displayId)}",
             )
         }
         logger.debug {
