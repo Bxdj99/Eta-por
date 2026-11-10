@@ -41,29 +41,37 @@ internal object CanvasRoutingPolicy {
     const val DISPLAY_IME_POLICY_HIDE = 2
 
     /**
-     * 受信任后台交互画布所需的完整标志组合：
-     * - OWN_FOCUS 是 STEAL_TOP_FOCUS_DISABLED 的前置条件；IME 另由 DISPLAY_IME_POLICY_HIDE 隔离；
-     * - 不启用 FLAG_ROTATES_WITH_CONTENT，锁定与物理主屏一致的固定画幅，避免跨应用跳转旋转时重建 Surface；
-     * - 不启用 FLAG_DESTROY_CONTENT_ON_REMOVAL，避免跨应用栈迁移或释放时误杀应用进程。
+     * 受信任后台交互画布所需的完整标志组合。
+     *
+     * 两个"看着合理其实是坑"的标志（本机 ColorOS / Android 16 实测）：
+     * - 不要 FLAG_OWN_CONTENT_ONLY：AOSP 用它推导 `DisplayDeviceInfo.canHostTasks`，设上就是 false，
+     *   于是任何 Activity/Task 都落不到这块屏 —— 表现就是"应用迁不进灵屏、只能退回主屏"。
+     * - 不要 FLAG_OWN_FOCUS：独立焦点屏会让 AccessibilityManagerService 只枚举默认 DisplayContent，
+     *   节点树永远是空的 —— 表现就是"截图有画面、observe_screen 没有节点"。
+     *
+     * 其余保留：PUBLIC + SUPPORTS_TOUCH + TRUSTED + OWN_DISPLAY_GROUP（独立 display group）
+     * + ALWAYS_UNLOCKED（锁屏下仍可交互）+ STEAL_TOP_FOCUS_DISABLED（不抢主屏焦点）。
+     * 不启用 FLAG_ROTATES_WITH_CONTENT（避免跳转旋转时重建 Surface），
+     * 不启用 FLAG_DESTROY_CONTENT_ON_REMOVAL（避免释放时误杀应用进程）。
      */
     const val TRUSTED_INTERACTIVE_FLAGS: Int =
         FLAG_PUBLIC or
-            FLAG_OWN_CONTENT_ONLY or
             FLAG_SUPPORTS_TOUCH or
             FLAG_TRUSTED or
             FLAG_OWN_DISPLAY_GROUP or
             FLAG_ALWAYS_UNLOCKED or
             FLAG_TOUCH_FEEDBACK_DISABLED or
-            FLAG_OWN_FOCUS or
             FLAG_STEAL_TOP_FOCUS_DISABLED
 
     // Android 13 尚无独立焦点与禁止抢占顶层焦点的组合能力，后台画布从 Android 14 起启用。
     fun supportsBackgroundDisplay(sdkInt: Int): Boolean = sdkInt >= 34
 
-    fun hasRequiredDisplayFlags(flags: Int): Boolean {
-        val required = DISPLAY_FLAG_TRUSTED or DISPLAY_FLAG_OWN_FOCUS or DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED
-        return flags and required == required
-    }
+    /**
+     * 只硬性要求 TRUSTED。OWN_FOCUS 已经不设（会瞎掉 a11y），
+     * STEAL_TOP_FOCUS_DISABLED 在部分 ROM 上不单独回显，拿它当门槛会造成"刚建好就判不合格"的重建死循环。
+     */
+    fun hasRequiredDisplayFlags(flags: Int): Boolean =
+        flags and DISPLAY_FLAG_TRUSTED == DISPLAY_FLAG_TRUSTED
 
     private val MAIN_DISPLAY_ONLY_PACKAGES = setOf(
         "android",

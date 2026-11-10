@@ -212,10 +212,27 @@ internal object VirtualDisplayController {
             val userId = DeviceToolContract.appUserId(appContext)
             val component = launchIntent.component?.flattenToShortString()
             if (!component.isNullOrBlank()) {
-                val cmd = "am start --user $userId --display $displayId -n ${DeviceToolContract.quote(component)}"
+                // 0x18800000 = NEW_TASK | MULTIPLE_TASK + EXCLUDE_FROM_RECENTS：
+                // 应用只在灵屏里跑，不往主屏「最近任务」丢卡片。
+                val cmd = "am start --user $userId --display $displayId -f 0x18800000 -n ${DeviceToolContract.quote(component)}"
                 val exec = BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = rootAvailable)
                 try {
-                    launchedByRoot = exec.execute(cmd, timeoutMillis = 6_000L).exitCode == 0
+                    val first = exec.execute(cmd, timeoutMillis = 6_000L)
+                    launchedByRoot = first.exitCode == 0
+                    if (!launchedByRoot) {
+                        // Android 16 的 SafeActivityOptions.checkPermissions 会拒 uid 0(root)/2000(shell)，
+                        // 只有 uid 1000(system) 能过 --display：被拒时换 system 身份重试一次。
+                        val denied = first.stderr.contains("Permission Denial", ignoreCase = true) ||
+                            first.stderr.contains("SecurityException", ignoreCase = true) ||
+                            first.stdout.contains("Permission Denial", ignoreCase = true)
+                        if (denied) {
+                            val retryCmd = "/system/bin/su 1000 -c ${DeviceToolContract.quote(cmd)}"
+                            launchedByRoot = exec.execute(retryCmd, timeoutMillis = 6_000L).exitCode == 0
+                            AndroidAgentLogger.debug {
+                                "Virtual display launch denied for uid 0, retried as system: ok=$launchedByRoot"
+                            }
+                        }
+                    }
                 } finally {
                     exec.close()
                 }
@@ -281,7 +298,7 @@ internal object VirtualDisplayController {
             val exec = BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = rootAvailable)
             val ok = try {
                 exec.execute(
-                    "am start --user $userId --display $displayId -a android.intent.action.VIEW -d ${DeviceToolContract.quote(uriString)}",
+                    "am start --user $userId --display $displayId -f 0x18800000 -a android.intent.action.VIEW -d ${DeviceToolContract.quote(uriString)}",
                     timeoutMillis = 6_000L,
                 ).exitCode == 0
             } finally {
