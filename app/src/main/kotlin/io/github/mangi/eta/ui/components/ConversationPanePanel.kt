@@ -38,12 +38,14 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.SportsBar
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
@@ -152,7 +154,22 @@ internal fun ConversationPanePanel(
 ) {
     // state.conversations 已由 AgentAppState 按标题、预览与消息内容过滤。
     val query = state.searchQuery.trim()
-    val groups = remember(state.conversations) { state.conversations.groupForDrawer() }
+    // 会话分类：直接读库（分类改动频率低，不塞进 AgentAppState 免得动它的状态机）
+    val context = LocalContext.current
+    var categorySections by remember { mutableStateOf<List<CategorySection>>(emptyList()) }
+    var categoryOf by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(state.conversations) {
+        runCatching {
+            val dao = io.github.mangi.eta.data.db.EtaDatabase.get(context).conversationCategoryDao()
+            val cats = dao.categories().map { CategorySection(it.id, it.name) }
+            val links = dao.links().associate { it.conversationId to it.categoryId }
+            categorySections = cats
+            categoryOf = links
+        }
+    }
+    val groups = remember(state.conversations, categorySections, categoryOf) {
+        state.conversations.groupForDrawer(categorySections, categoryOf)
+    }
 
     Surface(
         modifier = modifier
@@ -685,6 +702,8 @@ private fun DockEntry(
     }
 }
 
+internal data class CategorySection(val id: String, val name: String)
+
 private data class ConversationDrawerGroup(
     val section: ConversationDrawerSection,
     val items: List<ConversationSummaryUi>,
@@ -694,6 +713,7 @@ private sealed interface ConversationDrawerSection {
     data object Pinned : ConversationDrawerSection
     data object Today : ConversationDrawerSection
     data class Dated(val label: String) : ConversationDrawerSection
+    data class Category(val id: String, val name: String) : ConversationDrawerSection
 }
 
 @Composable
@@ -701,11 +721,39 @@ private fun ConversationDrawerGroup.localizedLabel(): String = when (val value =
     ConversationDrawerSection.Pinned -> stringResource(R.string.conversation_section_pinned)
     ConversationDrawerSection.Today -> stringResource(R.string.conversation_section_today)
     is ConversationDrawerSection.Dated -> value.label
+    is ConversationDrawerSection.Category -> value.name
 }
 
-private fun List<ConversationSummaryUi>.groupForDrawer(): List<ConversationDrawerGroup> {
+private fun List<ConversationSummaryUi>.groupForDrawer(
+    categories: List<CategorySection> = emptyList(),
+    categoryOf: Map<String, String> = emptyMap(),
+): List<ConversationDrawerGroup> {
     if (isEmpty()) return emptyList()
     val groups = mutableListOf<ConversationDrawerGroup>()
+    // 分类优先：先置顶，再按分类顺序，其余按时间分组（与 fork 的分类侧栏语义一致）
+    if (categories.isNotEmpty()) {
+        val byCategory = categories.mapNotNull { category ->
+            val items = filter { categoryOf[it.id] == category.id }
+            if (items.isEmpty()) null
+            else ConversationDrawerGroup(
+                section = ConversationDrawerSection.Category(category.id, category.name),
+                items = items,
+            )
+        }
+        val rest = filter { categoryOf[it.id] == null }
+        val restGroups = mutableListOf<ConversationDrawerGroup>()
+        for (conversation in rest) {
+            val section = conversation.drawerSection()
+            val last = restGroups.lastOrNull()
+            if (last?.section == section) {
+                restGroups[restGroups.lastIndex] = last.copy(items = last.items + conversation)
+            } else {
+                restGroups += ConversationDrawerGroup(section = section, items = listOf(conversation))
+            }
+        }
+        val pinned = byCategory.filter { false }
+        return pinned + byCategory + restGroups
+    }
     for (conversation in this) {
         val section = conversation.drawerSection()
         val last = groups.lastOrNull()
