@@ -274,6 +274,52 @@ internal object VirtualDisplayController {
      * （a11y.tree ... nodes=0 rootChildren=0），而迁移过来的真实实例是 resumed 的，节点树完整。
      * 迁移还能保住应用进程与草稿，不用重进。
      */
+    /** 通过 root helper（app_process, uid 0）迁移：只有 root 身份才看得到别的应用的 Task。 */
+    private fun movePackageTaskToDisplayByRoot(
+        context: Context,
+        displayId: Int,
+        packageName: String,
+        rootAvailable: () -> Boolean,
+    ): Int {
+        if (packageName.isBlank() || !rootAvailable()) return -1
+        val apkPath = context.applicationInfo.sourceDir
+        val cmd = "CLASSPATH=${DeviceToolContract.quote(apkPath)} app_process /system/bin " +
+            "io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayCommandMain"
+        val req = JSONObject()
+            .put("action", "move_to_display")
+            .put("display_id", Display.INVALID_DISPLAY)
+            .put("target_display_id", displayId)
+            .put("package_name", packageName)
+            .toString() + "\n"
+        val supervisor = ShellProcessSupervisor(rootAvailable = rootAvailable)
+        val proc = supervisor.startShellProcess("root", cmd, mergeStderr = true) ?: return -1
+        return try {
+            proc.outputStream.write(req.toByteArray(Charsets.UTF_8))
+            proc.outputStream.flush()
+            proc.outputStream.close()
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor(4, TimeUnit.SECONDS)
+            val line = out.lineSequence().firstOrNull { it.startsWith(VirtualDisplayCommandMain.RESULT_PREFIX) }
+                ?.removePrefix(VirtualDisplayCommandMain.RESULT_PREFIX)
+            val json = runCatching { JSONObject(line.orEmpty()) }.getOrNull()
+            if (json?.optBoolean("ok") == true) {
+                json.optInt("task_id", -1)
+            } else {
+                io.github.mangi.eta.core.EtaTrace.log(
+                    "vscr.launch",
+                    "move_failed pkg=$packageName display=$displayId code=${json?.optString("code")}",
+                )
+                -1
+            }
+        } catch (t: Throwable) {
+            -1
+        } finally {
+            supervisor.beginClosing()
+            if (proc.isAlive) supervisor.terminateAndReap(proc) else supervisor.reapProcess(proc)
+            supervisor.unregisterProcess(proc)
+        }
+    }
+
     private fun movePackageTaskToDisplay(
         context: Context,
         displayId: Int,
@@ -329,11 +375,16 @@ internal object VirtualDisplayController {
         mutePackageAudioFocusIfPossible(appContext, packageName, rootAvailable)
 
         // 已在跑 → 整块迁移（保住进程与草稿，且拿到的是 resumed 的真实实例，节点树才完整）。
-        val movedTaskId = movePackageTaskToDisplay(appContext, displayId, packageName)
+        // 必须走 root helper：进程内的 ActivityTaskManager.getTasks 只能看到自己，别的应用一律 TASK_NOT_FOUND。
+        val movedByRoot = movePackageTaskToDisplayByRoot(
+            appContext, displayId, packageName, rootAvailable,
+        )
+        val movedTaskId = movedByRoot.takeIf { it > 0 }
+            ?: movePackageTaskToDisplay(appContext, displayId, packageName)
         if (movedTaskId != null) {
             io.github.mangi.eta.core.EtaTrace.log(
                 "vscr.launch",
-                "moved task=$movedTaskId pkg=$packageName display=$displayId",
+                "moved task=$movedTaskId pkg=$packageName display=$displayId root=$movedByRoot",
             )
             synchronized(lock) {
                 val current = mutableSnapshots.value

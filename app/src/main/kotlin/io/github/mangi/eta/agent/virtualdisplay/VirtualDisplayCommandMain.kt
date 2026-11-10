@@ -92,7 +92,13 @@ internal object VirtualDisplayCommandMain {
             when (request.optString("action")) {
                 "hold_display" -> holdVirtualDisplay(request, reader)
                 "move_to_main" -> {
-                    val result = moveTaskToMainDisplay(request)
+                    val result = moveTaskToDisplay(request, Display.DEFAULT_DISPLAY)
+                    println(RESULT_PREFIX + result.toString())
+                    exitProcess(0)
+                }
+                "move_to_display" -> {
+                    val target = request.optInt("target_display_id", Display.INVALID_DISPLAY)
+                    val result = moveTaskToDisplay(request, target)
                     println(RESULT_PREFIX + result.toString())
                     exitProcess(0)
                 }
@@ -332,7 +338,7 @@ internal object VirtualDisplayCommandMain {
         }
     }.getOrNull()
 
-    private fun moveTaskToMainDisplay(request: JSONObject): JSONObject {
+    private fun moveTaskToDisplay(request: JSONObject, targetDisplayId: Int): JSONObject {
         val displayId = request.optInt("display_id", Display.INVALID_DISPLAY)
         val targetPackage = request.optString("package_name").trim()
         val atmClass = Class.forName("android.app.ActivityTaskManager")
@@ -378,7 +384,7 @@ internal object VirtualDisplayCommandMain {
             it.name == "moveRootTaskToDisplay" && it.parameterCount == 2
         } ?: return JSONObject().put("ok", false).put("code", "MOVE_METHOD_NOT_FOUND")
 
-        moveMethod.invoke(service, matchedTaskId, Display.DEFAULT_DISPLAY)
+        moveMethod.invoke(service, matchedTaskId, targetDisplayId)
         runCatching {
             serviceClass.methods.firstOrNull {
                 it.name == "setFocusedRootTask" && it.parameterCount == 1
@@ -387,6 +393,6 @@ internal object VirtualDisplayCommandMain {
         return JSONObject()
             .put("ok", true)
             .put("task_id", matchedTaskId)
-            .put("target_display_id", Display.DEFAULT_DISPLAY)
+            .put("target_display_id", targetDisplayId)
     }
 }
