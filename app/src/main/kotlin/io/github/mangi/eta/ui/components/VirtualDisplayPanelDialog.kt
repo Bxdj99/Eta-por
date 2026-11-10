@@ -48,6 +48,7 @@ internal fun VirtualDisplayPanelDialog(
     val scope = rememberCoroutineScope()
     val snapshot by VirtualDisplayController.snapshots.collectAsState()
     var notice by remember { mutableStateOf<String?>(null) }
+    var viewerOpen by remember { mutableStateOf(false) }
     val active = snapshot.active && CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)
     val closeText = stringResource(R.string.action_close)
 
@@ -83,10 +84,18 @@ internal fun VirtualDisplayPanelDialog(
                 )
             }
             if (active) {
-                Row(
+                TextButton(
+                    text = "打开灵屏画面（可触摸操作）",
+                    onClick = { viewerOpen = true },
+                    minWidth = 0.dp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 10.dp),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     TextButton(
@@ -138,6 +147,8 @@ internal fun VirtualDisplayPanelDialog(
             }
         }
     }
+
+    VirtualDisplayViewer(visible = viewerOpen, onDismiss = { viewerOpen = false })
 }
 
 @Composable

@@ -735,6 +735,13 @@ internal object VirtualDisplayController {
     @Volatile
     private var graceRelease: Runnable? = null
 
+    /** 有人正在看/操作灵屏：取消宽限计时，别在用户眼前把屏拆了。 */
+    fun keepAlive() {
+        if (graceRelease == null) return
+        cancelGraceRelease()
+        io.github.mangi.eta.core.EtaTrace.log("vscr.keep", "有人接管查看，取消宽限计时")
+    }
+
     /** 用户主动关闭灵屏：跳过宽限，立刻拆屏。 */
     fun closeNow(
         context: Context? = null,
