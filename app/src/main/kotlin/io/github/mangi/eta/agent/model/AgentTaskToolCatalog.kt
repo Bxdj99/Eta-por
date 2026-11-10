@@ -6,6 +6,7 @@ import org.json.JSONObject
 
 internal object AgentTaskToolCatalog {
     fun appendTo(tools: JSONArray) {
+        appendCategories(tools)
         fun schema(
             name: String,
             description: String,
@@ -127,6 +128,30 @@ internal object AgentTaskToolCatalog {
                 JSONObject().put("type", "integer").put("minimum", 1).put("maximum", 50)
             ),
             listOf("taskId")
+        )
+    }
+
+    /** 会话分类：把会话归到用户自建的分类里（侧栏按分类分组显示）。 */
+    private fun appendCategories(tools: JSONArray) {
+        tools.put(
+            AgentToolSchema.function(
+                name = "conversation_categories",
+                description = "Manage conversation categories shown in the sidebar: list / create / rename / delete / assign. " +
+                    "Deleting a category only clears the assignment, conversations are kept.",
+                parameters = JSONObject().put("type", "object").put("additionalProperties", false)
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("action", JSONObject().put("type", "string")
+                                .put("enum", JSONArray(listOf("list", "create", "rename", "delete", "assign")))
+                                .put("description", "Operation to perform."))
+                            .put("name", JSONObject().put("type", "string").put("description", "Category name for create/rename."))
+                            .put("categoryId", JSONObject().put("type", "string")
+                                .put("description", "Target category id; empty string on assign means remove from category."))
+                            .put("conversationId", JSONObject().put("type", "string").put("description", "Conversation id for assign."))
+                    )
+                    .put("required", JSONArray(listOf("action")))
+            )
         )
     }
 }

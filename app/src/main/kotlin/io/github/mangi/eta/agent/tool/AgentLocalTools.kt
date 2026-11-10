@@ -1,6 +1,7 @@
 package io.github.mangi.eta.agent.tool
 
 import io.github.mangi.eta.agent.automation.AgentTaskTools
+import io.github.mangi.eta.agent.automation.ConversationCategoryTools
 
 import android.content.Context
 import android.graphics.Rect
@@ -241,6 +242,8 @@ internal class AgentLocalTools(
             when (toolCall.name) {
                 in AgentTaskTools.names ->
                     AgentModelClient.ToolResult(AgentTaskTools(context).execute(toolCall.name, args), sensitive = true)
+                in ConversationCategoryTools.names ->
+                    AgentModelClient.ToolResult(ConversationCategoryTools(context).execute(toolCall.name, args), sensitive = true)
                 "get_current_context" -> textResult(DeviceContextTool.current(context))
                 "search_apps" -> textResult(searchApps(args))
                 "launch_app" -> {
