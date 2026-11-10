@@ -577,7 +577,9 @@ internal class AgentLocalTools(
                     "hint",
                     "这个应用没有向无障碍暴露控件节点（主屏与虚拟屏都一样，微信是典型）。已随本次回执附上截图：" +
                         "请按 normalized（0–999，按整屏比例）估算坐标后用 tap_area / swipe，点完再观察确认；" +
-                        "不要反复重试 include_ui_tree，它不会变。",
+                        "不要反复重试 include_ui_tree，它不会变。" +
+                        "如果附图是整块黑屏，说明该应用还开了 FLAG_SECURE 禁止截屏：此时截图与节点两条路都不通，" +
+                        "不要再硬试，改用其它证据源（通知栏、系统记录、用户自己的确认），或请用户授权读其应用数据。",
                 )
                 return@runCatching json.toString()
             }
