@@ -1371,4 +1371,12 @@
   <string name="conversation_branch_title">%1$s · 分支</string>
   <string name="conversation_branch_unavailable">無法從此處分支：僅支援上下文完整且工具呼叫已結束的輪次。</string>
   <string name="conversation_branch_failed">建立分支失敗，原對話已保留，請重試。</string>
+  <string name="conversation_category_move">移到分類</string>
+  <string name="conversation_category_uncategorized">未分類</string>
+  <string name="conversation_category_empty">還沒有分類</string>
+  <string name="conversation_category_rename">重新命名分類</string>
+  <string name="conversation_category_delete">刪除分類</string>
+  <string name="conversation_category_delete_confirm">這個分類下的會話會回到「未分類」，會話本身不會刪除。</string>
+  <string name="conversation_move_category_create">新建分類並移入</string>
+  <string name="conversation_move_category_name">分類名稱</string>
 </resources>

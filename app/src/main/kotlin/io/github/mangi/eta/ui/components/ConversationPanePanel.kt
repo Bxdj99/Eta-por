@@ -37,11 +37,13 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.SportsBar
 import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,11 +68,16 @@ import com.itos.coui.menu.rememberCouiMenuAnchor
 import com.itos.coui.shape.CouiShape
 import com.itos.coui.theme.CouiTheme
 import io.github.mangi.eta.R
+import io.github.mangi.eta.data.db.ConversationCategoryDao
+import io.github.mangi.eta.data.db.ConversationCategoryEntity
+import io.github.mangi.eta.data.db.ConversationCategoryLinkEntity
+import io.github.mangi.eta.data.db.EtaDatabase
 import io.github.mangi.eta.data.model.AppearanceUiStyle
 import io.github.mangi.eta.ui.app.LocalUiStyle
 import io.github.mangi.eta.ui.components.coui.CouiSearchBarBox
 import io.github.mangi.eta.ui.model.ConversationPaneUiState
 import io.github.mangi.eta.ui.model.ConversationSummaryUi
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.DropdownDefaults
 import top.yukonga.miuix.kmp.basic.DropdownImpl
 import top.yukonga.miuix.kmp.basic.DropdownItem
@@ -156,17 +163,36 @@ internal fun ConversationPanePanel(
     val query = state.searchQuery.trim()
     // 会话分类：直接读库（分类改动频率低，不塞进 AgentAppState 免得动它的状态机）
     val context = LocalContext.current
-    var categorySections by remember { mutableStateOf<List<CategorySection>>(emptyList()) }
+    val categoryScope = rememberCoroutineScope()
+    // 分类写操作后 +1，触发下面的重读；不把分类表塞进全局状态机
+    var categoryTick by remember { mutableStateOf(0) }
+    var categories by remember { mutableStateOf<List<ConversationCategoryEntity>>(emptyList()) }
     var categoryOf by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    LaunchedEffect(state.conversations) {
+    LaunchedEffect(state.conversations, categoryTick) {
         runCatching {
-            val dao = io.github.mangi.eta.data.db.EtaDatabase.get(context).conversationCategoryDao()
-            val cats = dao.categories().map { CategorySection(it.id, it.name) }
-            val links = dao.links().associate { it.conversationId to it.categoryId }
-            categorySections = cats
-            categoryOf = links
+            val dao = EtaDatabase.get(context).conversationCategoryDao()
+            categories = dao.categories()
+            categoryOf = dao.links().associate { it.conversationId to it.categoryId }
         }
     }
+    val categorySections = remember(categories) {
+        categories.map { CategorySection(it.id, it.name) }
+    }
+    val categoryOptions = remember(categories) {
+        categories.map { CategoryOption(it.id, it.name) }
+    }
+    val categoryWriter: (suspend (ConversationCategoryDao) -> Unit) -> Unit = { action ->
+        categoryScope.launch {
+            runCatching {
+                action(EtaDatabase.get(context).conversationCategoryDao())
+            }
+            categoryTick++
+        }
+    }
+    var moveTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
+    var manageTarget by remember { mutableStateOf<CategorySection?>(null) }
+    var renameTarget by remember { mutableStateOf<CategorySection?>(null) }
+    var deleteTarget by remember { mutableStateOf<CategorySection?>(null) }
     val groups = remember(state.conversations, categorySections, categoryOf) {
         state.conversations.groupForDrawer(categorySections, categoryOf)
     }
@@ -219,6 +245,9 @@ internal fun ConversationPanePanel(
                             ConversationSectionHeader(
                                 group = group,
                                 isFirstSection = groupIndex == 0,
+                                onLongPress = (group.section as? ConversationDrawerSection.Category)?.let { category ->
+                                    { manageTarget = CategorySection(category.id, category.name) }
+                                },
                             )
                         }
                         items(
@@ -232,6 +261,7 @@ internal fun ConversationPanePanel(
                                 onTogglePin = { onConversationTogglePin(conversation) },
                                 onRename = { onConversationRename(conversation) },
                                 onExport = { onConversationExport(conversation) },
+                                onMoveToCategory = { moveTarget = conversation },
                                 onDelete = { onConversationDelete(conversation) },
                             )
                         }
@@ -264,6 +294,114 @@ internal fun ConversationPanePanel(
             }
         }
     }
+
+    // —— 会话分类：长按会话「移到分类」、长按分类标题改名/删除 ——
+    ConversationCategoryPickerDialog(
+        conversationTitle = moveTarget?.let { it.title.ifBlank { it.preview } },
+        options = categoryOptions,
+        selectedCategoryId = moveTarget?.let { categoryOf[it.id] },
+        onPick = { categoryId ->
+            val target = moveTarget
+            if (target != null) {
+                categoryWriter { dao ->
+                    if (categoryId == null) {
+                        dao.unlink(target.id)
+                    } else {
+                        dao.link(
+                            ConversationCategoryLinkEntity(
+                                conversationId = target.id,
+                                categoryId = categoryId,
+                                updatedAt = System.currentTimeMillis(),
+                            ),
+                        )
+                    }
+                }
+            }
+            moveTarget = null
+        },
+        onCreateAndPick = { name ->
+            val target = moveTarget
+            if (target != null) {
+                categoryWriter { dao ->
+                    val categoryId = ensureCategoryId(dao, name)
+                    if (categoryId != null) {
+                        dao.link(
+                            ConversationCategoryLinkEntity(
+                                conversationId = target.id,
+                                categoryId = categoryId,
+                                updatedAt = System.currentTimeMillis(),
+                            ),
+                        )
+                    }
+                }
+            }
+            moveTarget = null
+        },
+        onDismiss = { moveTarget = null },
+    )
+
+    ConversationCategoryActionsDialog(
+        categoryName = manageTarget?.name,
+        onRename = {
+            renameTarget = manageTarget
+            manageTarget = null
+        },
+        onDelete = {
+            deleteTarget = manageTarget
+            manageTarget = null
+        },
+        onDismiss = { manageTarget = null },
+    )
+
+    renameTarget?.let { category ->
+        ConversationCategoryNameDialog(
+            visible = true,
+            initialName = category.name,
+            onConfirm = { newName ->
+                categoryWriter { dao ->
+                    val current = dao.categories().firstOrNull { it.id == category.id }
+                    if (current != null) {
+                        dao.upsert(current.copy(name = newName))
+                    }
+                }
+                renameTarget = null
+            },
+            onDismiss = { renameTarget = null },
+        )
+    }
+
+    deleteTarget?.let { category ->
+        ConversationCategoryDeleteDialog(
+            categoryName = category.name,
+            onConfirm = {
+                categoryWriter { dao ->
+                    dao.unlinkCategory(category.id)
+                    dao.delete(category.id)
+                }
+                deleteTarget = null
+            },
+            onDismiss = { deleteTarget = null },
+        )
+    }
+}
+
+/** 按名称取分类 id，没有就新建（同名不重复建，直接复用）。 */
+private suspend fun ensureCategoryId(dao: ConversationCategoryDao, name: String): String? {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) return null
+    val existing = dao.categories().firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+    if (existing != null) return existing.id
+    val nextOrder = (dao.categories().maxOfOrNull { it.sortOrder } ?: 0) + 1
+    val id = java.util.UUID.randomUUID().toString()
+    dao.upsert(
+        ConversationCategoryEntity(
+            id = id,
+            name = trimmed,
+            sortOrder = nextOrder,
+            createdAt = System.currentTimeMillis(),
+        ),
+    )
+    return id
 }
 
 @Composable
@@ -319,24 +457,47 @@ private fun PaneActionBar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationSectionHeader(
     group: ConversationDrawerGroup,
     isFirstSection: Boolean,
+    onLongPress: (() -> Unit)? = null,
 ) {
-    SmallTitle(
-        text = group.localizedLabel(),
-        insideMargin = PaddingValues(
-            start = ConversationPanelMetrics.RowHorizontalPadding,
-            top = if (isFirstSection) {
-                ConversationPanelMetrics.FirstSectionTopPadding
-            } else {
-                ConversationPanelMetrics.SectionTopPadding
-            },
-            end = ConversationPanelMetrics.RowHorizontalPadding,
-            bottom = ConversationPanelMetrics.SectionBottomPadding,
-        ),
-    )
+    val hapticFeedback = LocalHapticFeedback.current
+    val title: @Composable () -> Unit = {
+        SmallTitle(
+            text = group.localizedLabel(),
+            insideMargin = PaddingValues(
+                start = ConversationPanelMetrics.RowHorizontalPadding,
+                top = if (isFirstSection) {
+                    ConversationPanelMetrics.FirstSectionTopPadding
+                } else {
+                    ConversationPanelMetrics.SectionTopPadding
+                },
+                end = ConversationPanelMetrics.RowHorizontalPadding,
+                bottom = ConversationPanelMetrics.SectionBottomPadding,
+            ),
+        )
+    }
+    if (onLongPress == null) {
+        title()
+    } else {
+        // 分类标题长按 → 改名 / 删除；置顶与时间分组标题保持不可交互
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLongPress()
+                    },
+                ),
+        ) {
+            title()
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -348,6 +509,7 @@ private fun ConversationTextRow(
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
+    onMoveToCategory: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var showActionMenu by remember { mutableStateOf(false) }
@@ -464,17 +626,19 @@ private fun ConversationTextRow(
         )
         val renameText = stringResource(R.string.action_rename)
         val exportText = stringResource(R.string.action_export)
+        val moveText = stringResource(R.string.conversation_category_move)
         val deleteText = stringResource(R.string.action_delete)
         when (LocalUiStyle.current) {
             AppearanceUiStyle.COUI -> {
                 val destructiveColor = CouiDialogDefaults.themeColors().destructive
-                val menuItems = remember(pinText, renameText, exportText, deleteText, destructiveColor) {
+                val menuItems = remember(pinText, renameText, exportText, moveText, deleteText, destructiveColor) {
                     listOf(
                         CouiMenuItem(value = 0, text = pinText, icon = Icons.Outlined.PushPin),
                         CouiMenuItem(value = 1, text = renameText, icon = Icons.Outlined.Edit),
                         CouiMenuItem(value = 2, text = exportText, icon = Icons.Outlined.Download),
+                        CouiMenuItem(value = 3, text = moveText, icon = Icons.Rounded.FolderOpen),
                         CouiMenuItem(
-                            value = 3,
+                            value = 4,
                             text = deleteText,
                             icon = Icons.Outlined.Delete,
                             iconTint = destructiveColor,
@@ -492,7 +656,8 @@ private fun ConversationTextRow(
                             0 -> onTogglePin()
                             1 -> onRename()
                             2 -> onExport()
-                            3 -> onDelete()
+                            3 -> onMoveToCategory()
+                            4 -> onDelete()
                         }
                     },
                     anchor = anchor,
@@ -541,6 +706,18 @@ private fun ConversationTextRow(
                             },
                         )
                     }
+                    val moveItem = remember(moveText) {
+                        DropdownItem(
+                            text = moveText,
+                            icon = { modifier ->
+                                Icon(
+                                    imageVector = Icons.Rounded.FolderOpen,
+                                    contentDescription = null,
+                                    modifier = modifier.size(ConversationPanelMetrics.ActionIconSize),
+                                )
+                            },
+                        )
+                    }
                     val deleteItem = remember(deleteText) {
                         DropdownItem(
                             text = deleteText,
@@ -562,7 +739,7 @@ private fun ConversationTextRow(
                     ListPopupColumn {
                         DropdownImpl(
                             item = pinItem,
-                            optionSize = 4,
+                            optionSize = 5,
                             isSelected = false,
                             index = 0,
                             onSelectedIndexChange = {
@@ -572,7 +749,7 @@ private fun ConversationTextRow(
                         )
                         DropdownImpl(
                             item = renameItem,
-                            optionSize = 4,
+                            optionSize = 5,
                             isSelected = false,
                             index = 1,
                             onSelectedIndexChange = {
@@ -582,7 +759,7 @@ private fun ConversationTextRow(
                         )
                         DropdownImpl(
                             item = exportItem,
-                            optionSize = 4,
+                            optionSize = 5,
                             isSelected = false,
                             index = 2,
                             onSelectedIndexChange = {
@@ -591,10 +768,20 @@ private fun ConversationTextRow(
                             },
                         )
                         DropdownImpl(
-                            item = deleteItem,
-                            optionSize = 4,
+                            item = moveItem,
+                            optionSize = 5,
                             isSelected = false,
                             index = 3,
+                            onSelectedIndexChange = {
+                                showActionMenu = false
+                                onMoveToCategory()
+                            },
+                        )
+                        DropdownImpl(
+                            item = deleteItem,
+                            optionSize = 5,
+                            isSelected = false,
+                            index = 4,
                             dropdownColors = deleteColors,
                             onSelectedIndexChange = {
                                 showActionMenu = false

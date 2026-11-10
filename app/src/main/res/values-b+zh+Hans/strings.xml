@@ -1440,4 +1440,12 @@
   <string name="conversation_branch_title">%1$s · 分支</string>
   <string name="conversation_branch_unavailable">无法从此处分支：仅支持上下文完整且工具调用已结束的轮次。</string>
   <string name="conversation_branch_failed">创建分支失败，原对话已保留，请重试。</string>
+  <string name="conversation_category_move">移到分类</string>
+  <string name="conversation_category_uncategorized">未分类</string>
+  <string name="conversation_category_empty">还没有分类</string>
+  <string name="conversation_category_rename">重命名分类</string>
+  <string name="conversation_category_delete">删除分类</string>
+  <string name="conversation_category_delete_confirm">这个分类下的会话会回到「未分类」，会话本身不会删除。</string>
+  <string name="conversation_move_category_create">新建分类并移入</string>
+  <string name="conversation_move_category_name">分类名称</string>
 </resources>
