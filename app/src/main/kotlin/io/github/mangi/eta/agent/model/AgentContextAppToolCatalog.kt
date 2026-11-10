@@ -76,7 +76,7 @@ internal object AgentContextAppToolCatalog {
                                         .put("default", "auto")
                                         .put(
                                             "description",
-                                            "启动目标画布：auto（默认，跨应用任务优先在后台虚拟屏执行，不打断用户当前主屏）、virtual（显式在后台虚拟屏启动）、main（显式在物理主屏前台打开）。"
+                                            "启动目标画布：auto（默认，跨应用任务优先在后台虚拟屏执行，不打断用户当前主屏）、virtual（显式在后台虚拟屏启动）、main（显式在物理主屏前台打开）。用户说的「灵屏」「灵屏里」「后台虚拟屏」都指 virtual / auto，它是画布不是应用名，不要为「灵屏」调用 search_apps。"
                                         )
                                 )
                         )

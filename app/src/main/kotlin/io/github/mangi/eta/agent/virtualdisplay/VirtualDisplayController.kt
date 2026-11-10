@@ -267,6 +267,53 @@ internal object VirtualDisplayController {
     /**
      * 在虚拟屏上启动指定应用，并对其施加后台音频焦点静默保护。
      */
+    /**
+     * 应用已经在跑（任意屏）→ 把它的 Task 整块迁到目标显示屏。
+     *
+     * 为什么要迁移而不是另开实例：本机实测，`--display` 另起的多实例常常只有一个空根节点
+     * （a11y.tree ... nodes=0 rootChildren=0），而迁移过来的真实实例是 resumed 的，节点树完整。
+     * 迁移还能保住应用进程与草稿，不用重进。
+     */
+    private fun movePackageTaskToDisplay(
+        context: Context,
+        displayId: Int,
+        packageName: String,
+    ): Int? = runCatching {
+        if (packageName.isBlank()) return@runCatching null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            HiddenApiBypass.addHiddenApiExemptions(
+                "Landroid/app/ActivityTaskManager",
+                "Landroid/app/IActivityTaskManager",
+            )
+        }
+        val atmClass = Class.forName("android.app.ActivityTaskManager")
+        val service = atmClass.getMethod("getService").invoke(null) ?: return@runCatching null
+        val getTasks = service.javaClass.methods.firstOrNull { it.name == "getTasks" && it.parameterCount >= 1 }
+        val tasks = when (getTasks?.parameterCount) {
+            1 -> getTasks.invoke(service, 40)
+            3 -> getTasks.invoke(service, 40, false, false)
+            4 -> getTasks.invoke(service, 40, false, false, Display.INVALID_DISPLAY)
+            else -> null
+        } as? List<*> ?: emptyList<Any?>()
+        var targetTaskId = -1
+        for (item in tasks) {
+            val info = item as? android.app.TaskInfo ?: continue
+            val topPkg = info.topActivity?.packageName ?: info.baseActivity?.packageName
+            if (topPkg == packageName) {
+                targetTaskId = info.taskId
+                break
+            }
+        }
+        if (targetTaskId <= 0) return@runCatching null
+        val moveMethod = service.javaClass.getMethod(
+            "moveRootTaskToDisplay",
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+        )
+        moveMethod.invoke(service, targetTaskId, displayId)
+        targetTaskId
+    }.getOrNull()
+
     fun launchAppOnVirtualDisplay(
         context: Context,
         packageName: String,
@@ -281,6 +328,25 @@ internal object VirtualDisplayController {
         val appContext = context.applicationContext
         mutePackageAudioFocusIfPossible(appContext, packageName, rootAvailable)
 
+        // 已在跑 → 整块迁移（保住进程与草稿，且拿到的是 resumed 的真实实例，节点树才完整）。
+        val movedTaskId = movePackageTaskToDisplay(appContext, displayId, packageName)
+        if (movedTaskId != null) {
+            io.github.mangi.eta.core.EtaTrace.log(
+                "vscr.launch",
+                "moved task=$movedTaskId pkg=$packageName display=$displayId",
+            )
+            synchronized(lock) {
+                val current = mutableSnapshots.value
+                if (current.active && current.displayId == displayId) {
+                    mutableSnapshots.value = current.copy(
+                        appName = appName,
+                        packageName = packageName,
+                        materializingToMain = false,
+                    )
+                }
+            }
+            return displayId
+        }
         var launchedByRoot = false
         if (rootAvailable()) {
             val userId = DeviceToolContract.appUserId(appContext)
