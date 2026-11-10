@@ -525,23 +525,38 @@ internal class AgentLocalTools(
                 maxNodes = options.maxNodes,
                 displayId = displayId,
             )
+        // 有些应用（实测微信）根本不向无障碍暴露节点：主屏和灵屏都是 rootChildren=0。
+        // 这种情况下不要只回一个空树让模型自己再要一次截图 —— 直接补一张截图并说明降级方式。
+        val emptyTree = options.includeUiTree && observation.elementObservation?.nodes.isNullOrEmpty()
+        val effective = if (emptyTree && !options.includeScreenshot) {
+            runCatching {
+                deviceController.observe(
+                    includeScreenshot = true,
+                    includeUiTree = false,
+                    maxNodes = options.maxNodes,
+                    displayId = displayId,
+                )
+            }.getOrNull() ?: observation
+        } else {
+            observation
+        }
         publishObservation(
             PublishedObservation(
-                elements = observation.elementObservation,
-                coordinateSpace = observation.coordinateSpace,
-                generation = generation.takeIf { JSONObject(observation.content).optBoolean("ok") },
+                elements = effective.elementObservation,
+                coordinateSpace = effective.coordinateSpace,
+                generation = generation.takeIf { JSONObject(effective.content).optBoolean("ok") },
             ),
         )
         // 灵屏/主屏到底能不能看见节点，事后要能从 trace 回读（logcat 环形缓冲会滚掉）。
         runCatching {
-            val json = JSONObject(observation.content)
+            val json = JSONObject(effective.content)
             val a11y = json.optJSONObject("accessibility")
             io.github.mangi.eta.core.EtaTrace.log(
                 "gui.observe",
                 "canvas=${json.optString("canvas")} display=${json.optInt("display_id", -1)} " +
                     "a11y=${a11y?.optBoolean("available")} tree=${json.optString("ui_tree_status")} " +
-                    "nodes=${observation.elementObservation?.nodes?.size ?: 0} " +
-                    "image=${observation.image?.bytes ?: 0} coordinate=${observation.coordinateSpace?.summary()} " +
+                    "nodes=${effective.elementObservation?.nodes?.size ?: 0} " +
+                    "image=${effective.image?.bytes ?: 0} coordinate=${effective.coordinateSpace?.summary()} " +
                     "a11y=${io.github.mangi.eta.agent.accessibility.AgentAccessibilityService.windowDebugSummary(displayId)}",
             )
         }
@@ -552,10 +567,21 @@ internal class AgentLocalTools(
                 "image=${observation.image?.bytes ?: 0} elapsed_ms=${SystemClock.elapsedRealtime() - startedAt} " +
                 "coordinate=${observation.coordinateSpace?.summary()}"
         }
-        // 不要节点树时给一句明确提示：虚拟屏里的应用同样能出节点，别靠像素猜。
+        // 空树 / 未要树都给明确提示，别让模型把"看不见"当成"可以瞎点"。
         val content = runCatching {
-            if (options.includeUiTree) return@runCatching observation.content
-            val json = JSONObject(observation.content)
+            if (options.includeUiTree) {
+                if (!emptyTree) return@runCatching effective.content
+                val json = JSONObject(effective.content)
+                if (!json.optBoolean("ok")) return@runCatching effective.content
+                json.put(
+                    "hint",
+                    "这个应用没有向无障碍暴露控件节点（主屏与虚拟屏都一样，微信是典型）。已随本次回执附上截图：" +
+                        "请按 normalized（0–999，按整屏比例）估算坐标后用 tap_area / swipe，点完再观察确认；" +
+                        "不要反复重试 include_ui_tree，它不会变。",
+                )
+                return@runCatching json.toString()
+            }
+            val json = JSONObject(effective.content)
             if (!json.optBoolean("ok")) return@runCatching observation.content
             json.put(
                 "hint",
@@ -564,10 +590,10 @@ internal class AgentLocalTools(
                     "比按截图估坐标稳。",
             )
             json.toString()
-        }.getOrDefault(observation.content)
+        }.getOrDefault(effective.content)
         return AgentModelClient.ToolResult(
             content = content,
-            images = listOfNotNull(observation.image)
+            images = listOfNotNull(effective.image)
         )
     }
 
