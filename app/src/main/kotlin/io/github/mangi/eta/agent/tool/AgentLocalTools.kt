@@ -532,6 +532,18 @@ internal class AgentLocalTools(
                 generation = generation.takeIf { JSONObject(observation.content).optBoolean("ok") },
             ),
         )
+        // 灵屏/主屏到底能不能看见节点，事后要能从 trace 回读（logcat 环形缓冲会滚掉）。
+        runCatching {
+            val json = JSONObject(observation.content)
+            val a11y = json.optJSONObject("accessibility")
+            io.github.mangi.eta.core.EtaTrace.log(
+                "gui.observe",
+                "canvas=${json.optString("canvas")} display=${json.optInt("display_id", -1)} " +
+                    "a11y=${a11y?.optBoolean("available")} tree=${json.optString("ui_tree_status")} " +
+                    "nodes=${observation.elementObservation?.nodes?.size ?: 0} " +
+                    "image=${observation.image?.bytes ?: 0} coordinate=${observation.coordinateSpace?.summary()}",
+            )
+        }
         logger.debug {
             "Agent local tool action=observe_screen outcome=completed " +
                 "display=$displayId observation=${observation.elementObservation?.id} " +

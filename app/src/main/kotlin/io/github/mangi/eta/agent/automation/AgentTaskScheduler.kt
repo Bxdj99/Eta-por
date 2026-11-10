@@ -83,9 +83,17 @@ internal object AgentTaskScheduler {
     // 这样不额外耗电，也不会被深睡策略卡住——只要有动静，过期任务几秒内就补跑。
     private val lastOpportunistic = java.util.concurrent.atomic.AtomicLong(0)
 
+    /**
+     * 下一次可能到期的时刻，由 refresh() 维护。没有它时，无障碍的窗口变化会把这里当心跳：
+     * 实测每个窗口切换都进来一次 DB 读取 + 重新装闹钟，trace 里 20–30 秒一条空转。
+     */
+    private val cachedNextDueAt = java.util.concurrent.atomic.AtomicLong(Long.MAX_VALUE)
+
     fun opportunisticRun(context: Context) {
         val now = System.currentTimeMillis()
         if (now - lastOpportunistic.get() < 20_000L) return
+        // 离下次到期还早：直接返回，连 DB 都不碰。
+        if (now + 5_000L < cachedNextDueAt.get()) return
         if (!lastOpportunistic.compareAndSet(lastOpportunistic.get(), now)) return
         val app = context.applicationContext
         eventWorker.execute {
@@ -136,6 +144,7 @@ internal object AgentTaskScheduler {
             // 清单已声明 USE_EXACT_ALARM / SCHEDULE_EXACT_ALARM，正常情况下 canScheduleExactAlarms 为 true；
             // 系统确实不给时退回不精确闹钟，并留一行 trace 便于排查。
             val exactOk = runCatching { alarms.canScheduleExactAlarms() }.getOrDefault(false)
+            cachedNextDueAt.set(earliest ?: Long.MAX_VALUE)
             EtaTrace.log("task.refresh", "earliest=$earliest exact=$exactOk")
             // 关键：息屏/Doze 下 setExactAndAllowWhileIdle 仍会被推迟（实测 12:51:29 的闹钟 12:55:21 才响），
             // 只有 setAlarmClock 是系统承诺「准点、并唤醒设备」的通道（代价是状态栏出现闹钟图标）。
