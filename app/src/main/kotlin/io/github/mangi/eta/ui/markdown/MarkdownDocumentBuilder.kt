@@ -108,7 +108,8 @@ private class BlockConverter(
      */
     private fun codeFence(node: ASTNode): MarkdownBlock {
         val language = node.child(MarkdownTokenTypes.FENCE_LANG)
-            ?.text()?.trim()?.substringBefore(' ')?.takeIf(String::isNotEmpty)
+            // 保留完整 info string：`markdown file=/path` 的文件卡片刻度要靠它；显示时再取首词。
+            ?.text()?.trim()?.takeIf(String::isNotEmpty)
         val body = StringBuilder()
         var inBody = false
         for (child in node.children) {

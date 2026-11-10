@@ -260,6 +260,19 @@ private fun MarkdownText(
 
 @Composable
 private fun MarkdownCodeBlock(block: MarkdownCode, scope: MarkdownRenderScope) {
+    // 块级公式走离线 KaTeX（assets 内置，不联网、不依赖 WebView 联网权限）。
+    if (block.isMath) {
+        MathBlockView(tex = block.text.text, modifier = Modifier.padding(vertical = 4.dp))
+        return
+    }
+    // ```markdown file=/abs/path 的代码块渲染成文件卡片：可预览、可保存、可交给外部编辑器。
+    val fileSpec = remember(block.language, block.text.text) {
+        markdownFileSpec(block.language, block.text.text)
+    }
+    if (fileSpec != null) {
+        MarkdownFileCard(path = fileSpec.path, content = fileSpec.content)
+        return
+    }
     val style = scope.style
     // 折行开关：默认沿用调用方设置，可逐块切换，语言与内容变化时重置。
     var wrap by remember(block.text.text, block.language) { mutableStateOf(scope.codeWrap) }
@@ -275,7 +288,7 @@ private fun MarkdownCodeBlock(block: MarkdownCode, scope: MarkdownRenderScope) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = block.language ?: stringResource(R.string.markdown_code_block),
+                text = block.language?.substringBefore(' ') ?: stringResource(R.string.markdown_code_block),
                 style = MiuixTheme.textStyles.footnote2,
                 color = style.secondaryColor,
                 maxLines = 1,
