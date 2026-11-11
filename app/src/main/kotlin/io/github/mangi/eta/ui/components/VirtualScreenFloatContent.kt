@@ -1,7 +1,6 @@
 package io.github.mangi.eta.ui.components
 
 import androidx.compose.foundation.Image
-import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -9,11 +8,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,6 +41,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
 import io.github.mangi.eta.agent.display.VirtualScreenViewport
 import io.github.mangi.eta.agent.virtualdisplay.CanvasRoutingPolicy
 import io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayController
@@ -52,20 +50,16 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import kotlin.math.abs
 import kotlin.math.hypot
 
 /** 悬浮窗宿主：窗口参数由 AgentRuntimeService 改，Compose 只报意图。 */
 internal interface VirtualScreenFloatHost {
     fun moveBy(dx: Float, dy: Float)
 
-    /** 双指捏合 / 双击切档用同一个入口：因子缩放（>1 变大）。 */
+    /** 边缘拖动缩放：factor > 1 变大，1 以下变小（内部按 72–420dp 夹取）。 */
     fun scaleBy(factor: Float)
 
-    /** 双击在固定档位间循环（fork 的 sizeTiersDp）。 */
-    fun cycleTier()
-
-    /** 拖动过程中或松手时贴边：贴到左右边缘就立刻收成气泡。 */
+    /** 松手后归一：夹回屏内、贴边收气泡。 */
     fun settle(snapNow: Boolean)
 
     fun setCollapsed(collapsed: Boolean)
@@ -76,15 +70,14 @@ internal interface VirtualScreenFloatHost {
 }
 
 /**
- * 灵屏悬浮小窗（按 Oo0520/Eta-por 的 VirtualScreenFloatWindow 语义实现）：
+ * 灵屏悬浮小窗：
  *
- * - **无标题栏**：窗口即画面；顶部中间一条 28dp 的拖动条（三个点）负责移动窗口，
- *   长按拖动条 550ms 弹出操作条（全屏 / 关闭）
- * - **拖动即贴边**：拖到左右边缘的瞬间就收成气泡（fork 的 collapseIfAtEdge），不用等松手
- * - **双击**：在 96 / 144 / 200 / 272 dp 四档间循环（fork 的 cycleSizeTier，双击不是全屏）
- * - **双指捏合**：自由缩放，72–420dp
- * - **其余区域**：点击 / 长按 / 滑动注入灵屏
- * - **气泡态**：点击展开、拖动可移动
+ * - **顶部中间三个点（28dp）**：拖动窗口
+ * - **四边 / 四角（20dp 带）**：拖动缩放（左右改宽、上下改高、四角等比）—— 不再用双击切换档位
+ * - **其余内容区**：点击 / 长按 / 滑动注入灵屏
+ * - **双指捏合**：也能缩放
+ * - 拖到左右边缘：收成 35dp 方形气泡（图标取被投屏应用），点一下展开
+ * - **长按三点点**：弹出操作条（全屏 / 关闭）
  */
 @Composable
 internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
@@ -94,17 +87,14 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
     val snapshot by VirtualDisplayController.snapshots.collectAsState()
     val active = snapshot.active && CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
-    // 折叠态由窗口尺寸推导：宿主把窗口缩成 35dp 方形气泡（fork 的 collapse()），
-    // 这里不再自己维护一个 collapsed 布尔，免得两边状态打架。
-    val bubblePx = with(density) { 35.dp.toPx() }
-    val collapsed = boxSize.width in 1..(bubblePx + 6f).toInt()
     var actionsOpen by remember { mutableStateOf(false) }
     val viewport = remember(boxSize, snapshot.width, snapshot.height) {
         VirtualScreenViewport.fit(boxSize.width, boxSize.height, snapshot.width, snapshot.height)
     }
-    val handleHeight = with(density) { 28.dp.toPx() }
-
-    val outerMeasure = Modifier.fillMaxSize()
+    val bubblePx = with(density) { 35.dp.toPx() }
+    val collapsed = boxSize.width in 1..(bubblePx + 6f).toInt()
+    val handlePx = with(density) { 28.dp.toPx() }
+    val edgePx = with(density) { 20.dp.toPx() }
 
     fun normalized(x: Float, y: Float, clamp: Boolean = false): Pair<Float, Float>? {
         val vp = viewport ?: return null
@@ -114,85 +104,92 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
         return nx.coerceIn(0f, 1f) to ny.coerceIn(0f, 1f)
     }
 
-    Box(modifier = outerMeasure.onSizeChanged { boxSize = it }) {
-    if (collapsed) {
-        val icon = remember(snapshot.packageName) {
-            runCatching {
-                val pkg = snapshot.packageName.ifBlank { context.packageName }
-                context.packageManager.getApplicationIcon(pkg)?.toBitmap()?.asImageBitmap()
-            }.getOrNull()
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(50))
-                .background(Color(0xF21A1B1E))
-                .pointerInput(Unit) {
-                    // 气泡：点开 / 上下拖（fork 在气泡态把整块热区都给了这两个动作）
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        var last = down.position
-                        var moved = false
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (change.pressed) {
-                                val dx = change.position.x - change.previousPosition.x
-                                val dy = change.position.y - change.previousPosition.y
-                                if (dx != 0f || dy != 0f) {
-                                    host.moveBy(dx, dy)
-                                    moved = true
-                                }
-                                last = change.position
-                            }
-                            if (!change.pressed) break
-                        }
-                        if (!moved) host.setCollapsed(false)
-                    }
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            if (icon != null) {
-                Image(
-                    bitmap = icon,
-                    contentDescription = snapshot.appName.ifBlank { "灵屏" },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(5.dp)
-                        .clip(RoundedCornerShape(50)),
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.OpenInFull,
-                    contentDescription = "展开灵屏悬浮窗",
-                    tint = Color.White.copy(alpha = 0.8f),
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-        }
-        return@Box
+    fun zoneOf(point: Offset, width: Float, height: Float): Zone {
+        if (width <= 0f || height <= 0f) return Zone.Content
+        if (point.y <= handlePx && point.x in (width * 0.2f)..(width * 0.8f)) return Zone.Handle
+        val atLeft = point.x <= edgePx
+        val atRight = point.x >= width - edgePx
+        val atTop = point.y <= edgePx
+        val atBottom = point.y >= height - edgePx
+        if ((atLeft || atRight) && (atTop || atBottom)) return Zone.Corner
+        if (atLeft || atRight) return Zone.EdgeHorizontal
+        if (atTop || atBottom) return Zone.EdgeVertical
+        return Zone.Content
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xF21A1B1E)),
-    ) {
-        // 画面 + 内容区手势（注入灵屏）
+    Box(modifier = Modifier.fillMaxSize().onSizeChanged { boxSize = it }) {
+        if (collapsed) {
+            val icon = remember(snapshot.packageName) {
+                runCatching {
+                    val pkg = snapshot.packageName.ifBlank { context.packageName }
+                    context.packageManager.getApplicationIcon(pkg)?.toBitmap()?.asImageBitmap()
+                }.getOrNull()
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xF21A1B1E))
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var moved = false
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (change.pressed) {
+                                    val dx = change.position.x - change.previousPosition.x
+                                    val dy = change.position.y - change.previousPosition.y
+                                    if (dx != 0f || dy != 0f) {
+                                        host.moveBy(dx, dy)
+                                        moved = true
+                                    }
+                                }
+                                if (!change.pressed) break
+                            }
+                            if (!moved) host.setCollapsed(false)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (icon != null) {
+                    Image(
+                        bitmap = icon,
+                        contentDescription = snapshot.appName.ifBlank { "灵屏" },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(5.dp)
+                            .clip(RoundedCornerShape(50)),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.OpenInFull,
+                        contentDescription = "展开灵屏悬浮窗",
+                        tint = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            return@Box
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .onSizeChanged { boxSize = it }
-                .pointerInput(viewport, active) {
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xF21A1B1E))
+                .pointerInput(viewport, active, boxSize) {
                     val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
                     val longPressTimeout = android.view.ViewConfiguration.getLongPressTimeout()
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.position.y <= handleHeight) return@awaitEachGesture
+                        val width = size.width.toFloat()
+                        val height = size.height.toFloat()
+                        val zone = zoneOf(down.position, width, height)
                         val startedAt = down.uptimeMillis
                         var last = down.position
                         var aborted = false
+                        var longPressed = false
                         while (true) {
                             val event = awaitPointerEvent()
                             if (event.changes.size > 1) {
@@ -200,66 +197,87 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                                 break
                             }
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            val dx = change.position.x - change.previousPosition.x
+                            val dy = change.position.y - change.previousPosition.y
+                            change.consume()
+                            when (zone) {
+                                Zone.Handle -> {
+                                    if (dx != 0f || dy != 0f) host.moveBy(dx, dy)
+                                    if (!longPressed &&
+                                        android.os.SystemClock.uptimeMillis() - startedAt >= 550L &&
+                                        (change.position - down.position).getDistance() < with(density) { 8.dp.toPx() }
+                                    ) {
+                                        longPressed = true
+                                        actionsOpen = true
+                                    }
+                                }
+
+                                Zone.EdgeHorizontal -> {
+                                    if (dx != 0f) host.scaleBy(1f + dx / width.coerceAtLeast(1f))
+                                }
+
+                                Zone.EdgeVertical -> {
+                                    if (dy != 0f) host.scaleBy(1f + dy / height.coerceAtLeast(1f))
+                                }
+
+                                Zone.Corner -> {
+                                    val delta = dx + dy
+                                    if (delta != 0f) {
+                                        host.scaleBy(1f + delta / (width + height).coerceAtLeast(1f))
+                                    }
+                                }
+
+                                Zone.Content -> Unit
+                            }
                             last = change.position
                             if (!change.pressed) break
                         }
-                        if (aborted || !active) return@awaitEachGesture
+                        if (aborted) return@awaitEachGesture
                         val duration = (android.os.SystemClock.uptimeMillis() - startedAt)
                             .toInt().coerceIn(60, 3000)
-                        val moved = hypot(
-                            (last.x - down.position.x).toDouble(),
-                            (last.y - down.position.y).toDouble(),
-                        ) > slop
-                        if (moved) {
-                            val a = normalized(down.position.x, down.position.y, clamp = true)
-                            val b = normalized(last.x, last.y, clamp = true)
-                            if (a != null && b != null) {
-                                scope.launch(Dispatchers.IO) {
-                                    runCatching {
-                                        VirtualDisplayController.dispatchUserSwipeOnCanvas(
-                                            a.first, a.second, b.first, b.second,
-                                            duration.coerceAtMost(2000),
-                                        )
+                        when (zone) {
+                            Zone.Handle, Zone.EdgeHorizontal, Zone.EdgeVertical, Zone.Corner ->
+                                host.settle(snapNow = false)
+
+                            Zone.Content -> {
+                                if (!active) return@awaitEachGesture
+                                val moved = hypot(
+                                    (last.x - down.position.x).toDouble(),
+                                    (last.y - down.position.y).toDouble(),
+                                ) > slop
+                                if (moved) {
+                                    val a = normalized(down.position.x, down.position.y, clamp = true)
+                                    val b = normalized(last.x, last.y, clamp = true)
+                                    if (a != null && b != null) {
+                                        scope.launch(Dispatchers.IO) {
+                                            runCatching {
+                                                VirtualDisplayController.dispatchUserSwipeOnCanvas(
+                                                    a.first, a.second, b.first, b.second,
+                                                    duration.coerceAtMost(2000),
+                                                )
+                                            }
+                                        }
                                     }
-                                }
-                            }
-                        } else {
-                            val p = normalized(down.position.x, down.position.y) ?: return@awaitEachGesture
-                            val longPress = duration >= longPressTimeout
-                            scope.launch(Dispatchers.IO) {
-                                runCatching {
-                                    VirtualDisplayController.dispatchUserTapOnCanvas(p.first, p.second, longPress)
+                                } else {
+                                    val p = normalized(down.position.x, down.position.y)
+                                        ?: return@awaitEachGesture
+                                    val longPress = duration >= longPressTimeout
+                                    scope.launch(Dispatchers.IO) {
+                                        runCatching {
+                                            VirtualDisplayController.dispatchUserTapOnCanvas(
+                                                p.first, p.second, longPress,
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                // 双击切档；双指捏合缩放
-                .pointerInput(Unit) {
-                    var lastTapAt = 0L
-                    var lastTap: Offset? = null
-                    detectTapGestures(
-                        onTap = { offset ->
-                            if (offset.y <= handleHeight) return@detectTapGestures
-                            actionsOpen = false
-                            val now = android.os.SystemClock.uptimeMillis()
-                            val prev = lastTap
-                            if (prev != null && now - lastTapAt < 300L &&
-                                (prev - offset).getDistance() < with(density) { 20.dp.toPx() }
-                            ) {
-                                lastTap = null
-                                lastTapAt = 0L
-                                host.cycleTier()
-                            } else {
-                                lastTap = offset
-                                lastTapAt = now
-                            }
-                        },
-                    )
-                }
+                // 双指捏合也能缩放
                 .pointerInput(Unit) {
                     detectTransformGestures { _, _, zoom, _ ->
-                        if (abs(zoom - 1f) > 0.01f) host.scaleBy(zoom)
+                        if (zoom > 1.02f || zoom < 0.98f) host.scaleBy(zoom)
                     }
                 },
             contentAlignment = Alignment.Center,
@@ -281,43 +299,12 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
             }
         }
 
-        // 顶部中间：拖动条（三个点）。拖动=移动窗口，拖动中贴边即收气泡；长按=操作条
+        // 顶部中间：拖动条
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .fillMaxWidth(0.6f)
-                .height(28.dp)
-                .pointerInput(Unit) {
-                    var longPressed = false
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        longPressed = false
-                        val startedAt = down.uptimeMillis
-                        val startX = down.position.x
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (change.pressed) {
-                                val dx = change.position.x - change.previousPosition.x
-                                val dy = change.position.y - change.previousPosition.y
-                                if (dx != 0f || dy != 0f) {
-                                    host.moveBy(dx, dy)
-                                    // 拖动中贴边立即折叠（fork 的 collapseIfAtEdge）
-                                    host.settle(snapNow = true)
-                                }
-                                if (!longPressed &&
-                                    android.os.SystemClock.uptimeMillis() - startedAt >= 550L &&
-                                    (change.position - Offset(startX, down.position.y)).getDistance() < with(density) { 8.dp.toPx() }
-                                ) {
-                                    longPressed = true
-                                    actionsOpen = true
-                                }
-                            }
-                            if (!change.pressed) break
-                        }
-                        if (!longPressed) host.settle(snapNow = false)
-                    }
-                },
+                .fillMaxSize(0.6f)
+                .height(28.dp),
             contentAlignment = Alignment.Center,
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -326,13 +313,12 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                         modifier = Modifier
                             .size(4.dp)
                             .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.5f)),
+                            .background(Color.White.copy(alpha = 0.55f)),
                     )
                 }
             }
         }
 
-        // 长按拖动条弹出的操作条
         if (actionsOpen) {
             Row(
                 modifier = Modifier
@@ -379,7 +365,6 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
             }
         }
 
-        // 顶部右侧：状态点（运行中绿、未运行灰）
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -402,4 +387,5 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
         }
     }
 }
-}
+
+private enum class Zone { Handle, EdgeHorizontal, EdgeVertical, Corner, Content }

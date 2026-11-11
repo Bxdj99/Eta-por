@@ -1418,15 +1418,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             io.github.mangi.eta.core.EtaTrace.log("vscr.float", "scale factor=$factor short=${next}")
         }
 
-        override fun cycleTier() {
-            tierIndex = (tierIndex + 1) % FLOAT_TIERS_DP.size
-            applyVsrcFloatSize(FLOAT_TIERS_DP[tierIndex])
-            io.github.mangi.eta.core.EtaTrace.log(
-                "vscr.float",
-                "tier=$tierIndex short=${FLOAT_TIERS_DP[tierIndex]}",
-            )
-        }
-
         override fun settle(snapNow: Boolean) {
             val bounds = vsrcScreenBounds()
             val density = resources.displayMetrics.density.coerceAtLeast(1f)
@@ -1520,6 +1511,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     /** 自检：顶到右边缘 → 走一次 settle，验证是否变成 35dp 方形气泡。 */
     private fun vsrcFloatSelfTest() {
+        // 先验证"边缘拖动缩放"那条链路：放大 25% 再贴边收气泡，两步都打点
+        val before = vsrcFloatParams
+        vsrcFloatHost.scaleBy(1.25f)
+        val afterScale = vsrcFloatParams
+        io.github.mangi.eta.core.EtaTrace.log(
+            "vscr.float",
+            "selftest scale ${before?.width}x${before?.height} -> ${afterScale?.width}x${afterScale?.height}",
+        )
         val bounds = vsrcScreenBounds()
         applyVsrcFloatParams { params -> params.x = bounds.width() }
         vsrcFloatHost.settle(snapNow = true)
