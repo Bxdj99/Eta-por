@@ -183,6 +183,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 hideVsrcFloat()
                 return START_NOT_STICKY
             }
+            ACTION_VSRC_FLOAT_SELFTEST -> {
+                vsrcFloatSelfTest()
+                return START_NOT_STICKY
+            }
             ACTION_PAUSE_RUN -> requestPause(intent.getStringExtra(EXTRA_RUN_ID))
             ACTION_PAUSE_RUNS -> requestPause(null)
             ACTION_RESUME_RUN -> requestResume()
@@ -1514,6 +1518,18 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
+    /** 自检：顶到右边缘 → 走一次 settle，验证是否变成 35dp 方形气泡。 */
+    private fun vsrcFloatSelfTest() {
+        val bounds = vsrcScreenBounds()
+        applyVsrcFloatParams { params -> params.x = bounds.width() }
+        vsrcFloatHost.settle(snapNow = true)
+        val params = vsrcFloatParams
+        io.github.mangi.eta.core.EtaTrace.log(
+            "vscr.float",
+            "selftest after-settle w=${params?.width} h=${params?.height} x=${params?.x} y=${params?.y}",
+        )
+    }
+
     private fun hideVsrcFloat() {
         val view = vsrcFloatView ?: return
         io.github.mangi.eta.core.EtaTrace.log("vscr.float", "hide")
@@ -1776,6 +1792,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ACTION_STOP_RUN = "io.github.mangi.eta.agent.runtime.STOP_RUN"
         const val ACTION_SHOW_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_SHOW"
         const val ACTION_HIDE_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_HIDE"
+
+        /** 内部自检：把窗口顶到右边缘并触发贴边折叠，用来核对气泡几何。 */
+        const val ACTION_VSRC_FLOAT_SELFTEST = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_SELFTEST"
 
         /** fork 的悬浮窗档位（内容短边 dp），双击在四档间循环。 */
         private val FLOAT_TIERS_DP = floatArrayOf(96f, 144f, 200f, 272f)

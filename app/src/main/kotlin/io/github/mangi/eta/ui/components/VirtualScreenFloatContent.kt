@@ -104,6 +104,8 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
     }
     val handleHeight = with(density) { 28.dp.toPx() }
 
+    val outerMeasure = Modifier.fillMaxSize()
+
     fun normalized(x: Float, y: Float, clamp: Boolean = false): Pair<Float, Float>? {
         val vp = viewport ?: return null
         val nx = (x - vp.left) / (vp.screenWidth * vp.scale)
@@ -112,6 +114,7 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
         return nx.coerceIn(0f, 1f) to ny.coerceIn(0f, 1f)
     }
 
+    Box(modifier = outerMeasure.onSizeChanged { boxSize = it }) {
     if (collapsed) {
         val icon = remember(snapshot.packageName) {
             runCatching {
@@ -167,7 +170,7 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                 )
             }
         }
-        return
+        return@Box
     }
 
     Box(
@@ -398,4 +401,5 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
             )
         }
     }
+}
 }
