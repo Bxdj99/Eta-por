@@ -203,7 +203,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 return START_NOT_STICKY
             }
             ACTION_CLOSE_VSRC -> {
-                // 流体云卡上的「收起灵屏」：直接拆屏，不走 4 分钟宽限
+                // 流体云卡上的「收起灵屏」：直接拆屏，不走宽限（120 分钟）
                 hideVsrcFloat()
                 VirtualScreenFloatNotifier.clear(this)
                 thread(name = "eta-vsrc-close", isDaemon = true) {

@@ -12,7 +12,7 @@ import io.github.mangi.eta.R
 /**
  * 灵屏的常驻入口（流体云 / 通知栏）。
  *
- * 会话结束、小窗被收成气泡之后，灵屏往往还在跑（4 分钟宽限 + 用户主动保留）。
+ * 会话结束、小窗被收成气泡之后，灵屏往往还在跑（120 分钟宽限 + 用户主动保留）。
  * 这条卡就是那时的唯一可见入口：点一下把悬浮小窗重新叫回来，点「收起」直接拆灵屏。
  *
  * 与 [io.github.mangi.eta.agent.display.dashboard.AgentLiveActivityBridge] 的分工：

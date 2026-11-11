@@ -775,7 +775,7 @@ internal object VirtualDisplayController {
     }
 
     /** 闲置多久之后才真正拆屏：宽限期内下一次使用直接复用同一块屏与应用状态。 */
-    private val graceMillis = 4 * 60 * 1000L
+    private val graceMillis = 120 * 60 * 1000L
     private val graceHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     @Volatile

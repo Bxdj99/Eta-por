@@ -36,7 +36,7 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 /**
  * 灵屏（后台虚拟屏）面板：看它现在有没有在跑、跑的是哪个应用、画幅多大，
  * 并且给两个直达动作 ——「搬到主屏看」（把灵屏里的应用整块挪到主屏，肉眼可见）
- * 和「关闭灵屏」（跳过 4 分钟宽限，立刻拆屏）。
+ * 和「关闭灵屏」（跳过 120 分钟宽限，立刻拆屏）。
  */
 @Composable
 internal fun VirtualDisplayPanelDialog(
