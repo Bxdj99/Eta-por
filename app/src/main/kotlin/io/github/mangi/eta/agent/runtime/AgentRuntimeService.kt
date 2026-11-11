@@ -1381,6 +1381,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var vsrcMoveAccX = 0f
     private var vsrcMoveAccY = 0f
 
+    /** 缩放的目标短边（dp）。和位移一样：逐事件的因子变化太小，必须累积，否则全被闸门丢掉。 */
+    private var vsrcTargetShortDp = 0f
+
     /** 折叠气泡的记忆点：哪一侧、折叠前的位置，展开时按 fork 的 expand() 还原。 */
     private var vsrcCollapsedSide = 0
     private var vsrcPreCollapseX = 0
@@ -1425,12 +1428,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
 
         override fun scaleBy(factor: Float) {
-            val shortDp = vsrcShortSideDp()
-            val next = (shortDp * factor).coerceIn(FLOAT_MIN_DP, FLOAT_MAX_DP)
-            // 小于 0.5dp 的变化先忽略，否则边缘拖动会一直重排窗口
-            if (kotlin.math.abs(next - shortDp) < 0.5f) return
-            applyVsrcFloatSize(next)
-            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "scale factor=$factor short=${next}")
+            // 逐事件因子通常只有 1.002 这种量级，直接乘当前尺寸再四舍五入等于原地踏步，
+            // 所以维护一个浮点"目标短边"，累积到够一格（0.2dp）才真正重排窗口。
+            if (vsrcTargetShortDp <= 0f) vsrcTargetShortDp = vsrcShortSideDp()
+            vsrcTargetShortDp = (vsrcTargetShortDp * factor).coerceIn(FLOAT_MIN_DP, FLOAT_MAX_DP)
+            if (kotlin.math.abs(vsrcTargetShortDp - vsrcShortSideDp()) < 0.2f) return
+            applyVsrcFloatSize(vsrcTargetShortDp)
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "scale short=$vsrcTargetShortDp")
         }
 
         override fun settle(snapNow: Boolean) {
@@ -1522,6 +1526,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             params.x = params.x.coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
             params.y = params.y.coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
         }
+        vsrcTargetShortDp = shortDp
     }
 
     /** 自检：顶到右边缘 → 走一次 settle，验证是否变成 35dp 方形气泡。 */

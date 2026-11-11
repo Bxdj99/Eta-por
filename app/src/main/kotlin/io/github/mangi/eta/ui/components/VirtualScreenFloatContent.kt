@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -88,6 +89,9 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
     val active = snapshot.active && CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
     var actionsOpen by remember { mutableStateOf(false) }
+    // 边缘/四角拖动时先只做"视觉预览"，手指抬起才真正改窗口尺寸：
+    // 拖动过程中反复 updateViewLayout 会让 ColorOS 把这次触摸取消掉（"每滑一下就断"）。
+    var previewScale by remember { mutableStateOf(1f) }
     val viewport = remember(boxSize, snapshot.width, snapshot.height) {
         VirtualScreenViewport.fit(boxSize.width, boxSize.height, snapshot.width, snapshot.height)
     }
@@ -213,17 +217,24 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                                 }
 
                                 Zone.EdgeHorizontal -> {
-                                    if (dx != 0f) host.scaleBy(1f + dx / width.coerceAtLeast(1f))
+                                    if (dx != 0f) {
+                                        previewScale = (previewScale * (1f + dx / width.coerceAtLeast(1f)))
+                                            .coerceIn(0.4f, 2.5f)
+                                    }
                                 }
 
                                 Zone.EdgeVertical -> {
-                                    if (dy != 0f) host.scaleBy(1f + dy / height.coerceAtLeast(1f))
+                                    if (dy != 0f) {
+                                        previewScale = (previewScale * (1f + dy / height.coerceAtLeast(1f)))
+                                            .coerceIn(0.4f, 2.5f)
+                                    }
                                 }
 
                                 Zone.Corner -> {
                                     val delta = dx + dy
                                     if (delta != 0f) {
-                                        host.scaleBy(1f + delta / (width + height).coerceAtLeast(1f))
+                                        previewScale = (previewScale * (1f + delta / (width + height).coerceAtLeast(1f)))
+                                            .coerceIn(0.4f, 2.5f)
                                     }
                                 }
 
@@ -236,8 +247,15 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                         val duration = (android.os.SystemClock.uptimeMillis() - startedAt)
                             .toInt().coerceIn(60, 3000)
                         when (zone) {
-                            Zone.Handle, Zone.EdgeHorizontal, Zone.EdgeVertical, Zone.Corner ->
+                            Zone.EdgeHorizontal, Zone.EdgeVertical, Zone.Corner -> {
+                                if (kotlin.math.abs(previewScale - 1f) > 0.01f) {
+                                    host.scaleBy(previewScale)
+                                }
+                                previewScale = 1f
                                 host.settle(snapNow = false)
+                            }
+
+                            Zone.Handle -> host.settle(snapNow = false)
 
                             Zone.Content -> {
                                 if (!active) return@awaitEachGesture
@@ -288,7 +306,12 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                     bitmap = frame,
                     contentDescription = "灵屏画面",
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = previewScale
+                            scaleY = previewScale
+                        },
                 )
             } else {
                 Text(
