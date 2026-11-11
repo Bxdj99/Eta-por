@@ -1368,9 +1368,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         )
     }
 
-    private val vsrcFloatCollapsedWidth by lazy { dpToPx(28) }
+    /** 气泡边长（fork 的 collapse 里写死 35dp 方形）。 */
+    private val BUBBLE_DP = 35f
 
     private var tierIndex = 2
+
+    /** 折叠气泡的记忆点：哪一侧、折叠前的位置，展开时按 fork 的 expand() 还原。 */
+    private var vsrcCollapsedSide = 0
+    private var vsrcPreCollapseX = 0
+    private var vsrcPreCollapseY = 0
 
 
     private val vsrcFloatMaxWidth by lazy { dpToPx(420) }
@@ -1419,38 +1425,51 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         override fun settle(snapNow: Boolean) {
             val bounds = vsrcScreenBounds()
-            var collapsed = false
+            val density = resources.displayMetrics.density.coerceAtLeast(1f)
+            val bubble = (BUBBLE_DP * density).toInt()
+            var side = -1
             applyVsrcFloatParams { params ->
                 params.y = params.y.coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
                 val maxX = (bounds.width() - params.width).coerceAtLeast(0)
                 params.x = params.x.coerceIn(0, maxX)
                 // 贴到左右边缘就收气泡（拖动中 snapNow=true 时立即收，与 fork 的 collapseIfAtEdge 一致）
                 when {
-                    params.x <= 1 -> {
-                        params.x = 0
-                        params.width = vsrcFloatCollapsedWidth
-                        collapsed = true
-                    }
-
-                    params.x >= maxX - 1 -> {
-                        params.x = maxX
-                        params.width = vsrcFloatCollapsedWidth
-                        collapsed = true
-                    }
-
-                    else -> Unit
+                    params.x <= 1 -> side = 0
+                    params.x >= maxX - 1 -> side = 1
+                    else -> side = -1
+                }
+                if (side >= 0) {
+                    // 照 fork 的 collapse()：35dp 方形气泡、垂直居中于原窗口、贴死边缘
+                    vsrcPreCollapseX = params.x
+                    vsrcPreCollapseY = params.y
+                    params.y = (params.y + (params.height - bubble) / 2)
+                        .coerceIn(0, (bounds.height() - bubble).coerceAtLeast(0))
+                    params.width = bubble
+                    params.height = bubble
+                    params.x = if (side == 0) 0 else bounds.width() - bubble
                 }
             }
-            if (collapsed) {
-                io.github.mangi.eta.core.EtaTrace.log("vscr.float", "settle collapsed snap=$snapNow")
+            if (side >= 0) {
+                vsrcCollapsedSide = side
+                io.github.mangi.eta.core.EtaTrace.log(
+                    "vscr.float",
+                    "collapse side=$side bubble=$bubble x=${vsrcPreCollapseX} snap=$snapNow",
+                )
             }
         }
 
         override fun setCollapsed(collapsed: Boolean) {
             if (!collapsed) {
                 applyVsrcFloatSize(FLOAT_TIERS_DP[tierIndex])
+                val bounds = vsrcScreenBounds()
+                applyVsrcFloatParams { params ->
+                    params.x = vsrcPreCollapseX
+                        .coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
+                    params.y = vsrcPreCollapseY
+                        .coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
+                }
             } else {
-                applyVsrcFloatParams { it.width = vsrcFloatCollapsedWidth }
+                settle(snapNow = false)
             }
             io.github.mangi.eta.core.EtaTrace.log("vscr.float", "collapsed=$collapsed")
         }

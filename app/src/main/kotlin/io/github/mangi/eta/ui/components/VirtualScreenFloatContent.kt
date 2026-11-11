@@ -1,6 +1,7 @@
 package io.github.mangi.eta.ui.components
 
 import androidx.compose.foundation.Image
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -34,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -92,7 +94,10 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
     val snapshot by VirtualDisplayController.snapshots.collectAsState()
     val active = snapshot.active && CanvasRoutingPolicy.isVirtualDisplay(snapshot.displayId)
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
-    var collapsed by remember { mutableStateOf(false) }
+    // 折叠态由窗口尺寸推导：宿主把窗口缩成 35dp 方形气泡（fork 的 collapse()），
+    // 这里不再自己维护一个 collapsed 布尔，免得两边状态打架。
+    val bubblePx = with(density) { 35.dp.toPx() }
+    val collapsed = boxSize.width in 1..(bubblePx + 6f).toInt()
     var actionsOpen by remember { mutableStateOf(false) }
     val viewport = remember(boxSize, snapshot.width, snapshot.height) {
         VirtualScreenViewport.fit(boxSize.width, boxSize.height, snapshot.width, snapshot.height)
@@ -108,30 +113,59 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
     }
 
     if (collapsed) {
-        Column(
+        val icon = remember(snapshot.packageName) {
+            runCatching {
+                val pkg = snapshot.packageName.ifBlank { context.packageName }
+                context.packageManager.getApplicationIcon(pkg)?.toBitmap()?.asImageBitmap()
+            }.getOrNull()
+        }
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(50))
                 .background(Color(0xF21A1B1E))
                 .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = {
-                            collapsed = false
-                            host.setCollapsed(false)
-                        },
-                        onLongPress = { host.close() },
-                    )
+                    // 气泡：点开 / 上下拖（fork 在气泡态把整块热区都给了这两个动作）
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var last = down.position
+                        var moved = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.pressed) {
+                                val dx = change.position.x - change.previousPosition.x
+                                val dy = change.position.y - change.previousPosition.y
+                                if (dx != 0f || dy != 0f) {
+                                    host.moveBy(dx, dy)
+                                    moved = true
+                                }
+                                last = change.position
+                            }
+                            if (!change.pressed) break
+                        }
+                        if (!moved) host.setCollapsed(false)
+                    }
                 },
-            horizontalAlignment = Alignment.CenterHorizontally,
+            contentAlignment = Alignment.Center,
         ) {
-            Spacer(Modifier.weight(1f))
-            Icon(
-                imageVector = Icons.Rounded.OpenInFull,
-                contentDescription = "展开灵屏悬浮窗",
-                tint = Color.White.copy(alpha = 0.75f),
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.weight(1f))
+            if (icon != null) {
+                Image(
+                    bitmap = icon,
+                    contentDescription = snapshot.appName.ifBlank { "灵屏" },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(5.dp)
+                        .clip(RoundedCornerShape(50)),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Rounded.OpenInFull,
+                    contentDescription = "展开灵屏悬浮窗",
+                    tint = Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
         return
     }
