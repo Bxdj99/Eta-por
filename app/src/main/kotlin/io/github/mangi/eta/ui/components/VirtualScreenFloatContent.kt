@@ -97,8 +97,15 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
     }
     val bubblePx = with(density) { 35.dp.toPx() }
     val collapsed = boxSize.width in 1..(bubblePx + 6f).toInt()
-    val handlePx = with(density) { 28.dp.toPx() }
     val edgePx = with(density) { 20.dp.toPx() }
+    // 拖动手柄与操作条都要跟着窗口一起缩：窗口被拖到 72dp 时，固定 28dp 的手柄和
+    // 整条「全屏 / 关闭」会把画面挤没了，甚至互相盖住。这里按窗口短边算一个比例。
+    val shortSideDp = with(density) {
+        (minOf(boxSize.width, boxSize.height).takeIf { it > 0 } ?: boxSize.height).toDp().value
+    }
+    val handleDp = (shortSideDp * 0.24f).coerceIn(16f, 28f).dp
+    val handlePx = with(density) { handleDp.toPx() }
+    val dotDp = (shortSideDp * 0.035f).coerceIn(2.5f, 4f).dp
 
     fun normalized(x: Float, y: Float, clamp: Boolean = false): Pair<Float, Float>? {
         val vp = viewport ?: return null
@@ -255,7 +262,12 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                                 host.settle(snapNow = false)
                             }
 
-                            Zone.Handle -> host.settle(snapNow = false)
+                            Zone.Handle -> {
+                                // 轻点手柄 = 开/关操作条，免得它一直挡着画面
+                                val tapped = (last - down.position).getDistance() < slop
+                                if (tapped && !longPressed) actionsOpen = !actionsOpen
+                                host.settle(snapNow = false)
+                            }
 
                             Zone.Content -> {
                                 if (!active) return@awaitEachGesture
@@ -322,19 +334,19 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
             }
         }
 
-        // 顶部中间：拖动条
+        // 顶部中间：拖动条（尺寸随窗口缩放，见 handleDp）
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxSize(0.6f)
-                .height(28.dp),
+                .height(handleDp),
             contentAlignment = Alignment.Center,
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(dotDp * 0.75f)) {
                 repeat(3) {
                     Box(
                         modifier = Modifier
-                            .size(4.dp)
+                            .size(dotDp)
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.55f)),
                     )
@@ -343,10 +355,23 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
         }
 
         if (actionsOpen) {
+            // 窗口被拖小以后，固定尺寸的操作条会盖掉整条画面、两个按钮还互相挤。
+            // 这里让操作条按窗口宽度整体缩放；窄到放不下文字时只留图标。
+            val showLabels = boxSize.width >= with(density) { 176.dp.toPx() }
+            val baseWidthPx = with(density) { (if (showLabels) 152.dp else 84.dp).toPx() }
+            val menuScale = if (baseWidthPx > 0f) {
+                (boxSize.width / baseWidthPx).coerceIn(0.6f, 1f)
+            } else {
+                1f
+            }
             Row(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 30.dp)
+                    .padding(top = handleDp + 2.dp)
+                    .graphicsLayer {
+                        scaleX = menuScale
+                        scaleY = menuScale
+                    }
                     .clip(RoundedCornerShape(10.dp))
                     .background(Color.Black.copy(alpha = 0.78f))
                     .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -362,12 +387,14 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.OpenInFull,
-                        contentDescription = null,
+                        contentDescription = "全屏",
                         tint = Color.White,
                         modifier = Modifier.size(14.dp),
                     )
-                    Spacer(Modifier.width(4.dp))
-                    Text("全屏", color = Color.White, style = MiuixTheme.textStyles.footnote2)
+                    if (showLabels) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("全屏", color = Color.White, style = MiuixTheme.textStyles.footnote2)
+                    }
                 }
                 Row(
                     modifier = Modifier
@@ -378,12 +405,14 @@ internal fun VirtualScreenFloatContent(host: VirtualScreenFloatHost) {
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
-                        contentDescription = null,
+                        contentDescription = "关闭",
                         tint = Color.White,
                         modifier = Modifier.size(14.dp),
                     )
-                    Spacer(Modifier.width(4.dp))
-                    Text("关闭", color = Color.White, style = MiuixTheme.textStyles.footnote2)
+                    if (showLabels) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("关闭", color = Color.White, style = MiuixTheme.textStyles.footnote2)
+                    }
                 }
             }
         }

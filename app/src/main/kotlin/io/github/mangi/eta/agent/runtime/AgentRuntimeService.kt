@@ -156,12 +156,31 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         serviceScope.launch { guiControl.state.collect(::applyGuiControlState) }
         serviceScope.launch {
             VirtualDisplayController.snapshots.collect { snapshot ->
-                val wasActive = virtualDisplayState.value.active
+                val previous = virtualDisplayState.value
+                val wasActive = previous.active
                 virtualDisplayState.value = snapshot
                 if (wasActive != snapshot.active) {
                     if (!snapshot.active) VirtualDisplayController.setStageExpanded(false)
+                    // 灵屏一开就把小窗摆出来，灵屏真结束才收掉；会话结束不属于「结束」。
+                    if (snapshot.active) {
+                        vsrcFloatDismissedByUser = false
+                        showVsrcFloat(auto = true)
+                    } else {
+                        vsrcFloatDismissedByUser = false
+                        hideVsrcFloat()
+                        VirtualScreenFloatNotifier.clear(this@AgentRuntimeService)
+                    }
                     updateCapsuleWindowBounds()
                     displayedRun?.let(::syncActiveRunOverlayVisibility)
+                }
+                // 会话进行中流体云让给任务卡（会话卡点开就能看到灵屏），
+                // 任务收尾后再把灵屏卡补上，两个时段各一张，不抢位置。
+                if (snapshot.active && runs.all().isEmpty()) {
+                    if (!wasActive || previous.packageName != snapshot.packageName ||
+                        previous.appName != snapshot.appName
+                    ) {
+                        VirtualScreenFloatNotifier.publish(this@AgentRuntimeService, snapshot.appName)
+                    }
                 }
             }
         }
@@ -181,6 +200,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
             ACTION_HIDE_VSRC_FLOAT -> {
                 hideVsrcFloat()
+                return START_NOT_STICKY
+            }
+            ACTION_CLOSE_VSRC -> {
+                // 流体云卡上的「收起灵屏」：直接拆屏，不走 4 分钟宽限
+                hideVsrcFloat()
+                VirtualScreenFloatNotifier.clear(this)
+                thread(name = "eta-vsrc-close", isDaemon = true) {
+                    runCatching { VirtualDisplayController.closeNow(this@AgentRuntimeService) }
+                }
                 return START_NOT_STICKY
             }
             ACTION_VSRC_FLOAT_SELFTEST -> {
@@ -223,6 +251,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         AgentOverlayClearance.detach(clearanceHost)
         VirtualDisplayController.release(this)
         unregisterResultCardBack()
+        hideVsrcFloat()
+        VirtualScreenFloatNotifier.clear(this)
         resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
         capsuleView?.let { view -> runCatching { windowManager?.removeView(view) } }
         glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
@@ -1031,6 +1061,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         displayedRun?.completedContext = null
         displayedRun = run
         capsuleExpanded.value = false
+        // 任务卡接棒：灵屏的常驻卡先撤，任务结束（dismissAndStop）再补回来。
+        VirtualScreenFloatNotifier.clear(this)
     }
 
     private fun publishExecutionState() {
@@ -1323,9 +1355,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private var vsrcFloatParams: WindowManager.LayoutParams? = null
 
+    /** 用户在小窗上按了「关闭」：本次灵屏生命周期里不再自动弹出来。 */
+    private var vsrcFloatDismissedByUser = false
+
     /** 灵屏悬浮小窗：贴屏幕右上，标题条拖动，内容区点/滑直接注入灵屏。 */
-    private fun showVsrcFloat() {
+    private fun showVsrcFloat(auto: Boolean = false) {
+        if (auto && vsrcFloatDismissedByUser) return
         if (vsrcFloatView != null) return
+        // 重新建窗以前先把「折叠前尺寸」清掉，否则展开气泡会跳到上一次的旧尺寸。
+        vsrcPreCollapseWidth = 0
+        vsrcPreCollapseHeight = 0
+        vsrcFloatDismissedByUser = false
         // 关键：TYPE_ACCESSIBILITY_OVERLAY 必须用无障碍服务的 WindowManager 添加，
         // 用 Service 自己的 WindowManager 会抛 BadTokenException（上游注释里踩过这个坑）。
         val addContext = overlayContext()
@@ -1388,6 +1428,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var vsrcCollapsedSide = 0
     private var vsrcPreCollapseX = 0
     private var vsrcPreCollapseY = 0
+
+    /** 折叠前的窗口尺寸。恢复 fork 的 FLOAT_TIERS 会把用户拖过的大小扔掉。 */
+    private var vsrcPreCollapseWidth = 0
+    private var vsrcPreCollapseHeight = 0
 
 
     private val vsrcFloatMaxWidth by lazy { dpToPx(420) }
@@ -1456,6 +1500,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     // 照 fork 的 collapse()：35dp 方形气泡、垂直居中于原窗口、贴死边缘
                     vsrcPreCollapseX = params.x
                     vsrcPreCollapseY = params.y
+                    vsrcPreCollapseWidth = params.width
+                    vsrcPreCollapseHeight = params.height
                     params.y = (params.y + (params.height - bubble) / 2)
                         .coerceIn(0, (bounds.height() - bubble).coerceAtLeast(0))
                     params.width = bubble
@@ -1474,7 +1520,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         override fun setCollapsed(collapsed: Boolean) {
             if (!collapsed) {
-                applyVsrcFloatSize(FLOAT_TIERS_DP[tierIndex])
+                // 展开回用户折叠前的尺寸；没有记录才回到档位默认。
+                if (vsrcPreCollapseWidth > 0 && vsrcPreCollapseHeight > 0) {
+                    applyVsrcFloatExactSize(vsrcPreCollapseWidth, vsrcPreCollapseHeight)
+                } else {
+                    applyVsrcFloatSize(FLOAT_TIERS_DP[tierIndex])
+                }
                 val bounds = vsrcScreenBounds()
                 applyVsrcFloatParams { params ->
                     params.x = vsrcPreCollapseX
@@ -1488,7 +1539,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             io.github.mangi.eta.core.EtaTrace.log("vscr.float", "collapsed=$collapsed")
         }
 
-        override fun close() = hideVsrcFloat()
+        override fun close() {
+            // 用户主动关掉：灵屏还活着也不再自动弹，等他点流体云或面板再说。
+            vsrcFloatDismissedByUser = true
+            hideVsrcFloat()
+            io.github.mangi.eta.core.EtaTrace.log("vscr.float", "closed_by_user")
+        }
 
         override fun openFullscreen() {
             hideVsrcFloat()
@@ -1499,6 +1555,47 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 )
             }
         }
+    }
+
+    /** 按像素尺寸还原窗口（折叠展开时恢复用户拖出来的大小）。 */
+    private fun applyVsrcFloatExactSize(widthPx: Int, heightPx: Int) {
+        val bounds = vsrcScreenBounds()
+        applyVsrcFloatParams { params ->
+            params.width = widthPx
+            params.height = heightPx
+            params.x = params.x.coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
+            params.y = params.y.coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
+        }
+        val density = resources.displayMetrics.density.coerceAtLeast(1f)
+        vsrcTargetShortDp = (minOf(widthPx, heightPx) / density).coerceAtLeast(FLOAT_MIN_DP)
+    }
+
+    /**
+     * 会话结束但灵屏还活着：把大窗收成贴右边的气泡。
+     * 入口不会消失：气泡点一下就原尺寸展开，流体云卡也能叫回来。
+     */
+    private fun collapseVsrcFloatToEdge() {
+        val params = vsrcFloatParams ?: return
+        val density = resources.displayMetrics.density.coerceAtLeast(1f)
+        val bubble = (BUBBLE_DP * density).toInt()
+        if (params.width <= bubble + 6) return
+        val bounds = vsrcScreenBounds()
+        applyVsrcFloatParams { p ->
+            vsrcPreCollapseX = p.x
+            vsrcPreCollapseY = p.y
+            vsrcPreCollapseWidth = p.width
+            vsrcPreCollapseHeight = p.height
+            p.width = bubble
+            p.height = bubble
+            p.x = (bounds.width() - bubble).coerceAtLeast(0)
+            p.y = (vsrcPreCollapseY + (vsrcPreCollapseHeight - bubble) / 2)
+                .coerceIn(0, (bounds.height() - bubble).coerceAtLeast(0))
+        }
+        vsrcCollapsedSide = 1
+        io.github.mangi.eta.core.EtaTrace.log(
+            "vscr.float",
+            "auto_collapse bubble=$bubble x=${bounds.width() - bubble}",
+        )
     }
 
     /** 当前窗口短边（dp），用于捏合与切档。 */
@@ -1769,6 +1866,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         displayedRun?.completedContext = null
         displayedRun = null
         removeOverlayWindows()
+        // 会话收尾但灵屏还在：小窗不撤，收成贴边气泡并保留流体云卡。
+        // 用户要的是「别消失、收起来一点就能看见」。
+        if (virtualDisplayState.value.active) {
+            collapseVsrcFloatToEdge()
+            VirtualScreenFloatNotifier.publish(this, virtualDisplayState.value.appName)
+        }
         if (runs.all().isEmpty() && !guiControl.state.value.userPaused) {
             VirtualDisplayController.release(this)
             stopSelf()
@@ -1821,6 +1924,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ACTION_STOP_RUN = "io.github.mangi.eta.agent.runtime.STOP_RUN"
         const val ACTION_SHOW_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_SHOW"
         const val ACTION_HIDE_VSRC_FLOAT = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_HIDE"
+
+        /** 流体云/通知栏上的「收起灵屏」：不走宽限，直接拆屏并收掉小窗。 */
+        const val ACTION_CLOSE_VSRC = "io.github.mangi.eta.agent.runtime.VSRC_CLOSE"
 
         /** 内部自检：把窗口顶到右边缘并触发贴边折叠，用来核对气泡几何。 */
         const val ACTION_VSRC_FLOAT_SELFTEST = "io.github.mangi.eta.agent.runtime.VSRC_FLOAT_SELFTEST"
