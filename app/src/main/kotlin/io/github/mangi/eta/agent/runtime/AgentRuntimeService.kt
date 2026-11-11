@@ -1377,6 +1377,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private var tierIndex = 2
 
+    /** 拖动位移的小数余量（像素），避免逐事件 toInt() 截断成 0。 */
+    private var vsrcMoveAccX = 0f
+    private var vsrcMoveAccY = 0f
+
     /** 折叠气泡的记忆点：哪一侧、折叠前的位置，展开时按 fork 的 expand() 还原。 */
     private var vsrcCollapsedSide = 0
     private var vsrcPreCollapseX = 0
@@ -1405,15 +1409,26 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 悬浮窗手势宿主：按 fork 的 VirtualScreenFloatWindow 语义操作窗口参数。 */
     private val vsrcFloatHost = object : io.github.mangi.eta.ui.components.VirtualScreenFloatHost {
         override fun moveBy(dx: Float, dy: Float) {
+            // 一次 MOVE 往往不到 1px：直接 toInt() 会被截断成 0，表现就是"怎么拖都不动"。
+            // 把小数余量攒起来，凑够 1px 再真正改窗口参数。
+            vsrcMoveAccX += dx
+            vsrcMoveAccY += dy
+            val stepX = vsrcMoveAccX.toInt()
+            val stepY = vsrcMoveAccY.toInt()
+            if (stepX == 0 && stepY == 0) return
+            vsrcMoveAccX -= stepX
+            vsrcMoveAccY -= stepY
             applyVsrcFloatParams { params ->
-                params.x += dx.toInt()
-                params.y += dy.toInt()
+                params.x += stepX
+                params.y += stepY
             }
         }
 
         override fun scaleBy(factor: Float) {
             val shortDp = vsrcShortSideDp()
             val next = (shortDp * factor).coerceIn(FLOAT_MIN_DP, FLOAT_MAX_DP)
+            // 小于 0.5dp 的变化先忽略，否则边缘拖动会一直重排窗口
+            if (kotlin.math.abs(next - shortDp) < 0.5f) return
             applyVsrcFloatSize(next)
             io.github.mangi.eta.core.EtaTrace.log("vscr.float", "scale factor=$factor short=${next}")
         }
@@ -1511,6 +1526,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     /** 自检：顶到右边缘 → 走一次 settle，验证是否变成 35dp 方形气泡。 */
     private fun vsrcFloatSelfTest() {
+        // 先验证位移累加：连续 10 次 0.4px 应当累积成 4px（以前逐次 toInt() 会全丢）
+        val px0 = vsrcFloatParams?.x ?: 0
+        val py0 = vsrcFloatParams?.y ?: 0
+        repeat(10) { vsrcFloatHost.moveBy(0.4f, 0.3f) }
+        val px1 = vsrcFloatParams?.x ?: 0
+        val py1 = vsrcFloatParams?.y ?: 0
+        io.github.mangi.eta.core.EtaTrace.log(
+            "vscr.float",
+            "selftest move dx=${px1 - px0} dy=${py1 - py0} (期望 4 / 3)",
+        )
         // 先验证"边缘拖动缩放"那条链路：放大 25% 再贴边收气泡，两步都打点
         val before = vsrcFloatParams
         vsrcFloatHost.scaleBy(1.25f)
