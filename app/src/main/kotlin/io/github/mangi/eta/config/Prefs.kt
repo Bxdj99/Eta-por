@@ -145,6 +145,14 @@ internal object Prefs {
         return remote?.getString(key, "") ?: ""
     }
 
+    /** 本地 Agent 配置里的整数项（灵屏分辨率/帧率/宽限这类可调参数）。 */
+    fun getAgentInt(key: String, default: Int): Int =
+        localAgent?.getInt(key, default) ?: default
+
+    /** 写整数项并同步落盘，返回值表示是否真的写成功。 */
+    fun setAgentInt(key: String, value: Int): Boolean =
+        runCatching { localAgent?.edit()?.putInt(key, value)?.commit() }.getOrDefault(false) == true
+
     fun powerAssistantTarget(): PowerAssistantTarget = powerAssistantTarget(remote)
 
     fun powerAssistantTarget(preferences: SharedPreferences?): PowerAssistantTarget {

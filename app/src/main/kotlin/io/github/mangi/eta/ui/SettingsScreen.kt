@@ -8,11 +8,14 @@ import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.AccessibilityNew
+import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Cloud
@@ -38,8 +41,10 @@ import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.SettingsVoice
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SportsBar
 import androidx.compose.material.icons.rounded.SupportAgent
 import androidx.compose.material.icons.rounded.SwipeUp
@@ -76,6 +81,7 @@ import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.accessibility.AccessibilityProtectionClient
 import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
 import io.github.mangi.eta.config.PowerAssistantTarget
+import io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayTuning
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.data.model.AppearanceUiStyle
 import io.github.mangi.eta.data.repository.ProviderRepository
@@ -110,6 +116,8 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.layout.DialogDefaults
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
@@ -491,6 +499,36 @@ private fun SettingsPageContent(
                         title = "灵屏使用期间自动解锁",
                         key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
                         icon = Icons.Rounded.LockOpen,
+                        iconTint = SettingsIconColors.Green,
+                    )
+                    CouiIconDivider()
+                    SelectPref(
+                        title = "灵屏分辨率",
+                        key = VirtualDisplayTuning.KEY_HEIGHT,
+                        options = VirtualDisplayTuning.HEIGHT_OPTIONS,
+                        default = VirtualDisplayTuning.DEFAULT_HEIGHT,
+                        label = VirtualDisplayTuning::heightLabel,
+                        icon = Icons.Rounded.AspectRatio,
+                        iconTint = SettingsIconColors.Blue,
+                    )
+                    CouiIconDivider()
+                    SelectPref(
+                        title = "灵屏帧率",
+                        key = VirtualDisplayTuning.KEY_FPS,
+                        options = VirtualDisplayTuning.FPS_OPTIONS,
+                        default = VirtualDisplayTuning.DEFAULT_FPS,
+                        label = VirtualDisplayTuning::fpsLabel,
+                        icon = Icons.Rounded.Speed,
+                        iconTint = SettingsIconColors.Orange,
+                    )
+                    CouiIconDivider()
+                    SelectPref(
+                        title = "灵屏闲置关闭时间",
+                        key = VirtualDisplayTuning.KEY_GRACE_MINUTES,
+                        options = VirtualDisplayTuning.GRACE_OPTIONS,
+                        default = VirtualDisplayTuning.DEFAULT_GRACE_MINUTES,
+                        label = VirtualDisplayTuning::graceLabel,
+                        icon = Icons.Rounded.Schedule,
                         iconTint = SettingsIconColors.Green,
                     )
                     CouiIconDivider()
@@ -929,6 +967,33 @@ private fun SettingsPageContent(
                             title = "灵屏使用期间自动解锁",
                             key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
                             icon = Icons.Rounded.LockOpen,
+                            iconTint = SettingsIconColors.Green,
+                        )
+                        SelectPref(
+                            title = "灵屏分辨率",
+                            key = VirtualDisplayTuning.KEY_HEIGHT,
+                            options = VirtualDisplayTuning.HEIGHT_OPTIONS,
+                            default = VirtualDisplayTuning.DEFAULT_HEIGHT,
+                            label = VirtualDisplayTuning::heightLabel,
+                            icon = Icons.Rounded.AspectRatio,
+                            iconTint = SettingsIconColors.Blue,
+                        )
+                        SelectPref(
+                            title = "灵屏帧率",
+                            key = VirtualDisplayTuning.KEY_FPS,
+                            options = VirtualDisplayTuning.FPS_OPTIONS,
+                            default = VirtualDisplayTuning.DEFAULT_FPS,
+                            label = VirtualDisplayTuning::fpsLabel,
+                            icon = Icons.Rounded.Speed,
+                            iconTint = SettingsIconColors.Orange,
+                        )
+                        SelectPref(
+                            title = "灵屏闲置关闭时间",
+                            key = VirtualDisplayTuning.KEY_GRACE_MINUTES,
+                            options = VirtualDisplayTuning.GRACE_OPTIONS,
+                            default = VirtualDisplayTuning.DEFAULT_GRACE_MINUTES,
+                            label = VirtualDisplayTuning::graceLabel,
+                            icon = Icons.Rounded.Schedule,
                             iconTint = SettingsIconColors.Green,
                         )
                         ArrowPreference(
@@ -1458,6 +1523,70 @@ private fun SwitchPref(
                 startAction = {
                     SettingsIcon(icon = icon, enabled = enabled, tint = iconTint)
                 },
+                enabled = enabled,
+            )
+        }
+    }
+}
+
+/**
+ * 数值型偏好项：分辨率 / 帧率 / 宽限这类「从有限档位里选一个」的设置。
+ * 两种 UI 风格各用各自的组件：COUI 点开一个选项对话框，MIUIX 用下拉。
+ * 写入走 [Prefs.setAgentInt]，运行时（VirtualDisplayController）读同一份值。
+ */
+@Composable
+private fun SelectPref(
+    title: String,
+    key: String,
+    options: List<Int>,
+    default: Int,
+    label: (Int) -> String,
+    icon: ImageVector,
+    iconTint: Color,
+) {
+    val enabled = Prefs.localAgentPreferences() != null
+    var current by remember(key) { mutableStateOf(Prefs.getAgentInt(key, default)) }
+    var expanded by remember(key) { mutableStateOf(false) }
+    val select: (Int) -> Unit = { value ->
+        if (Prefs.setAgentInt(key, value)) current = value
+        expanded = false
+    }
+    when (LocalUiStyle.current) {
+        AppearanceUiStyle.COUI -> {
+            CouiPreference(
+                title = title,
+                value = label(current),
+                enabled = enabled,
+                onClick = { expanded = true },
+                icon = { CouiSettingsIcon(icon = icon, tint = iconTint, enabled = enabled) },
+            )
+            if (expanded) {
+                WindowDialog(
+                    show = true,
+                    cornerRadius = DialogDefaults.CornerRadius,
+                    title = title,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        options.forEach { option ->
+                            TextButton(
+                                text = if (option == current) "✓ ${label(option)}" else label(option),
+                                onClick = { select(option) },
+                                minWidth = 0.dp,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        AppearanceUiStyle.MIUIX -> {
+            OverlayDropdownPreference(
+                title = title,
+                items = options.map(label),
+                selectedIndex = options.indexOf(current).coerceAtLeast(0),
+                onSelectedIndexChange = { index -> options.getOrNull(index)?.let(select) },
+                startAction = { SettingsIcon(icon = icon, tint = iconTint, enabled = enabled) },
                 enabled = enabled,
             )
         }

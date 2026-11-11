@@ -128,6 +128,7 @@ internal object VirtualDisplayCommandMain {
         val width = request.optInt("width", 1080).coerceIn(320, 4096)
         val height = request.optInt("height", 2400).coerceIn(320, 4096)
         val densityDpi = request.optInt("density_dpi", 420).coerceIn(120, 960)
+        val refreshRate = request.optDouble("refresh_rate", 0.0).toFloat().coerceIn(0f, 144f)
 
         val surface = acquireSurfaceFromApp(userId, token)
         if (surface == null || !surface.isValid) {
@@ -138,7 +139,7 @@ internal object VirtualDisplayCommandMain {
         // 优先切换至 SYSTEM_UID (1000) 以通过 DisplayManagerService 对 ADD_TRUSTED_DISPLAY 与 CAPTURE_VIDEO_OUTPUT 的校验
         switchToSystemUidIfPossible()
 
-        val virtualDisplay = createTrustedVirtualDisplay(surface, width, height, densityDpi)
+        val virtualDisplay = createTrustedVirtualDisplay(surface, width, height, densityDpi, refreshRate)
         if (virtualDisplay == null) {
             surface.release()
             println(RESULT_PREFIX + JSONObject().put("ok", false).put("code", "CREATE_DISPLAY_FAILED"))
@@ -293,12 +294,13 @@ internal object VirtualDisplayCommandMain {
         width: Int,
         height: Int,
         densityDpi: Int,
+        refreshRate: Float = 0f,
     ): android.hardware.display.VirtualDisplay? = runCatching {
         val activityThreadClass = Class.forName("android.app.ActivityThread")
         val thread = activityThreadClass.getMethod("systemMain").invoke(null)
         val systemContext = activityThreadClass.getMethod("getSystemContext").invoke(thread) as android.content.Context
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val config = android.hardware.display.VirtualDisplayConfig.Builder(
+            val builder = android.hardware.display.VirtualDisplayConfig.Builder(
                 CanvasRoutingPolicy.VIRTUAL_DISPLAY_NAME,
                 width,
                 height,
@@ -306,7 +308,9 @@ internal object VirtualDisplayCommandMain {
             )
                 .setSurface(surface)
                 .setFlags(CanvasRoutingPolicy.TRUSTED_INTERACTIVE_FLAGS)
-                .build()
+            // 帧率跟设置走；0 表示不显式指定，交给系统按物理屏刷新率决定。
+            if (refreshRate > 0f) builder.setRequestedRefreshRate(refreshRate)
+            val config = builder.build()
             val dmgClass = Class.forName("android.hardware.display.DisplayManagerGlobal")
             val dmg = dmgClass.getMethod("getInstance").invoke(null)
             val createMethod = dmgClass.methods.firstOrNull {

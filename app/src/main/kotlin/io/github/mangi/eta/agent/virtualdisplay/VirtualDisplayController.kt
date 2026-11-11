@@ -124,6 +124,7 @@ internal object VirtualDisplayController {
             var accepted = false
             try {
                 val (width, height, densityDpi) = resolvePhysicalDisplayMetrics(appContext)
+                val refreshRate = VirtualDisplayTuning.requestedRefreshRate()
                 frameWorker.start()
                 val frames = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
                 reader = frames
@@ -132,6 +133,7 @@ internal object VirtualDisplayController {
                 if (rootAvailable()) {
                     rootBridge = RootVirtualDisplayBridge.create(
                         appContext, frames.surface, width, height, densityDpi, rootAvailable,
+                        refreshRate = refreshRate,
                     ) { process ->
                         val ownsSession = synchronized(lock) {
                             sessionState.isCurrent(token) && displayResources?.bridge?.process === process
@@ -142,7 +144,7 @@ internal object VirtualDisplayController {
                 val id = rootBridge?.displayId ?: run {
                     if (EtaApp.serviceInstance == null) return null
                     inProcessDisplay = tryCreateInProcessVirtualDisplay(
-                        appContext, frames.surface, width, height, densityDpi,
+                        appContext, frames.surface, width, height, densityDpi, refreshRate,
                     )
                     inProcessDisplay?.display?.displayId ?: return null
                 }
@@ -775,7 +777,7 @@ internal object VirtualDisplayController {
     }
 
     /** 闲置多久之后才真正拆屏：宽限期内下一次使用直接复用同一块屏与应用状态。 */
-    private val graceMillis = 120 * 60 * 1000L
+    private fun graceMillis(): Long = VirtualDisplayTuning.graceMillis()
     private val graceHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     @Volatile
@@ -818,16 +820,22 @@ internal object VirtualDisplayController {
             return
         }
         cancelGraceRelease()
+        val millis = graceMillis()
+        if (millis <= 0L) {
+            // 设置里选了「不自动拆」：屏与应用一直留着，等用户主动关或进程结束。
+            io.github.mangi.eta.core.EtaTrace.log("vscr.keep", "宽限设为常驻，不自动拆屏（屏幕锁已放开）")
+            return
+        }
         val runnable = Runnable {
             graceRelease = null
             io.github.mangi.eta.core.EtaTrace.log("vscr.keep", "宽限期结束，拆屏")
             releaseSession(appContext, rootAvailable)
         }
         graceRelease = runnable
-        graceHandler.postDelayed(runnable, graceMillis)
+        graceHandler.postDelayed(runnable, millis)
         io.github.mangi.eta.core.EtaTrace.log(
             "vscr.keep",
-            "release 请求转为宽限保留 ${graceMillis / 1000}s（屏幕锁已放开）",
+            "release 请求转为宽限保留 ${millis / 1000}s（屏幕锁已放开）",
         )
     }
 
@@ -868,7 +876,8 @@ internal object VirtualDisplayController {
 
         try {
             val now = SystemClock.elapsedRealtime()
-            val minIntervalMs = if (highFrequencyPreview) 30L else 160L
+            val minIntervalMs = VirtualDisplayTuning.frameIntervalMs()
+                ?: if (highFrequencyPreview) 30L else 160L
             val shouldUpdateUi = now - lastUiFrameAtElapsedMs >= minIntervalMs || latestFullBitmap == null
 
             val bitmap = decodeImageToBitmap(image) ?: return
@@ -970,13 +979,14 @@ internal object VirtualDisplayController {
         width: Int,
         height: Int,
         densityDpi: Int,
+        refreshRate: Float = 0f,
     ): VirtualDisplay? = runCatching {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             runCatching { HiddenApiBypass.addHiddenApiExemptions("Landroid/hardware/display/") }
         }
         val dm = appContext.getSystemService(DisplayManager::class.java) ?: return@runCatching null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val config = VirtualDisplayConfig.Builder(
+            val builder = VirtualDisplayConfig.Builder(
                 CanvasRoutingPolicy.VIRTUAL_DISPLAY_NAME,
                 width,
                 height,
@@ -984,8 +994,9 @@ internal object VirtualDisplayController {
             )
                 .setSurface(surface)
                 .setFlags(CanvasRoutingPolicy.TRUSTED_INTERACTIVE_FLAGS)
-                .build()
-            dm.createVirtualDisplay(config)
+            // 帧率跟设置走；0 表示交给系统按物理屏刷新率决定。
+            if (refreshRate > 0f) builder.setRequestedRefreshRate(refreshRate)
+            dm.createVirtualDisplay(builder.build())
         } else {
             dm.createVirtualDisplay(
                 CanvasRoutingPolicy.VIRTUAL_DISPLAY_NAME,
@@ -1157,6 +1168,6 @@ internal object VirtualDisplayController {
                 height = point.y
             }
         }
-        return Triple(width, height, density)
+        return VirtualDisplayTuning.scaledMetrics(width, height, density)
     }
 }

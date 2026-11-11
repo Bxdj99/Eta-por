@@ -78,6 +78,7 @@ internal class RootVirtualDisplayBridge private constructor(
             height: Int,
             densityDpi: Int,
             rootAvailable: () -> Boolean,
+            refreshRate: Float = 0f,
             onDisconnected: (Process) -> Unit,
         ): RootVirtualDisplayBridge? {
             val token = VirtualDisplaySurfaceRegistry.register(surface)
@@ -100,6 +101,7 @@ internal class RootVirtualDisplayBridge private constructor(
                     .put("width", width)
                     .put("height", height)
                     .put("density_dpi", densityDpi)
+                    .put("refresh_rate", refreshRate.toDouble())
                     .toString() + "\n"
 
                 thread(name = "eta-vd-bridge-stdout", isDaemon = true) {
