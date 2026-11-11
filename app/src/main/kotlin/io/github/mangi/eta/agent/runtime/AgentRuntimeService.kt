@@ -1380,10 +1380,19 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val view = createOverlayComposeView {
             io.github.mangi.eta.ui.components.VirtualScreenFloatContent(host = vsrcFloatHost)
         }
-        val paramsWidth = dpToPx(210)
+        // 一开始就用最小档：72dp 短边（长边按灵屏比例撑开），贴在右上角。
+        // 想要更大自己拖边缘；这里不再默认铺一块 210×400 的大窗挡屏幕。
+        val snapshot = virtualDisplayState.value
+        val aspect = if (snapshot.width > 0 && snapshot.height > 0) {
+            snapshot.height.toFloat() / snapshot.width.toFloat()
+        } else {
+            2.17f
+        }
+        val paramsWidth = dpToPx(FLOAT_MIN_DP.toInt())
+        val paramsHeight = (paramsWidth * aspect).toInt().coerceAtLeast(1)
         val params = WindowManager.LayoutParams(
             paramsWidth,
-            dpToPx(400),
+            paramsHeight,
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -1393,8 +1402,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             gravity = Gravity.TOP or Gravity.LEFT
             val bounds = vsrcScreenBounds()
             x = (bounds.width() - paramsWidth - dpToPx(8)).coerceAtLeast(0)
-            y = dpToPx(160)
+            // 让开状态栏与顶部胶囊（胶囊底边约 112dp），落在右上角。
+            y = dpToPx(120)
         }
+        vsrcTargetShortDp = FLOAT_MIN_DP
         runCatching { windowManager.addView(view, params) }.onFailure {
             AndroidAgentLogger.warn("virtual screen float window add failed: ${it.javaClass.simpleName}")
             io.github.mangi.eta.core.EtaTrace.log(
