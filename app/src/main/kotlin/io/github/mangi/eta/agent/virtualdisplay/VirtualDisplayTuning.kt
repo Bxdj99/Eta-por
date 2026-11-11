@@ -25,7 +25,7 @@ internal object VirtualDisplayTuning {
     const val DEFAULT_GRACE_MINUTES = 120
 
     val HEIGHT_OPTIONS = listOf(0, 1280, 1600, 1920, 2400)
-    val FPS_OPTIONS = listOf(0, 15, 30, 60, 120)
+    val FPS_OPTIONS = listOf(0, 15, 30, 60, 120, 144)
     val GRACE_OPTIONS = listOf(0, 15, 30, 60, 120, 240)
 
     fun heightPx(): Int = Prefs.getAgentInt(KEY_HEIGHT, DEFAULT_HEIGHT)
@@ -56,7 +56,9 @@ internal object VirtualDisplayTuning {
     fun frameIntervalMs(): Long? {
         val fps = fps()
         if (fps <= 0) return null
-        return (1000L / fps).coerceAtLeast(16L)
+        // 144fps 也就是 6.9ms 一帧，16ms 的下限会把高刷档位全吃掉；
+        // 这里只留 6ms 的硬底，避免把同一条帧反复解码。
+        return (1000L / fps).coerceAtLeast(6L)
     }
 
     /** 虚拟屏请求的刷新率；0 表示不显式设置。 */
