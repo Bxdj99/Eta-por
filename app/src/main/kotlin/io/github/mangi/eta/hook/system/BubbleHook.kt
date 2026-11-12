@@ -12,6 +12,7 @@ import android.service.notification.StatusBarNotification
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
+import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.HookRegistrar
 import io.github.mangi.eta.core.HookSupport
 import io.github.mangi.eta.core.ModuleLogger
@@ -41,7 +42,24 @@ internal object BubbleHook {
     /** 原模块 timeout_seconds（3–15 秒）的默认档，用于超时淡化。 */
     private const val BALL_DIM_DELAY_MS = 6_000L
     private val dimRunnable = Runnable {
-        ball?.animate()?.alpha(0.35f)?.setDuration(180L)?.start()
+        val view = ball ?: return@Runnable
+        when {
+            cfgBool(Prefs.Keys.AGENT_BUBBLE_AUTO_DISMISS, false) -> {
+                // 对齐 bubble_auto_dismiss：超时直接缩小淡出并清空队列
+                queue.clear()
+                view.animate()
+                    .alpha(0f)
+                    .scaleX(0.6f)
+                    .scaleY(0.6f)
+                    .setDuration(200L)
+                    .withEndAction { removeBall() }
+                    .start()
+            }
+            cfgBool(Prefs.Keys.AGENT_BUBBLE_TIMEOUT_DIM, true) -> {
+                // 对齐 bubble_timeout_dim：压到 0.35，触摸恢复
+                view.animate().alpha(0.35f).setDuration(180L).start()
+            }
+        }
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -64,6 +82,9 @@ internal object BubbleHook {
     private var startY = 0
     private var dragging = false
     private var longPressed = false
+    /** 球当前是否吸附在左右边缘（供 edge_only 与卡片定位使用）。 */
+    private var docked = false
+    private var breathAnimator: android.animation.ValueAnimator? = null
     private val holdRunnable = Runnable {
         longPressed = true
         ball?.alpha = 1f
@@ -126,8 +147,43 @@ internal object BubbleHook {
         host = application
     }
 
+    // ---- 配置读取（SystemUI 进程只能读框架下发的 remote prefs） ----
+
+    private fun cfgBool(key: String, default: Boolean): Boolean =
+        runCatching { Prefs.isEnabled(key) }.getOrDefault(default)
+
+    private fun cfgInt(key: String, default: Int): Int =
+        runCatching { Prefs.getRemoteInt(key, default) }.getOrDefault(default)
+
+    private fun cfgString(key: String, default: String): String =
+        runCatching { Prefs.getRemoteString(key, default) }.getOrDefault(default)
+
+    private fun parseList(raw: String): Set<String> = runCatching {
+        val array = org.json.JSONArray(raw)
+        buildSet {
+            for (index in 0 until array.length()) add(array.optString(index))
+        }
+    }.getOrDefault(emptySet())
+
+    /** 黑白名单：白名单非空时只放行白名单，黑名单始终排除。 */
+    private fun allowed(packageName: String): Boolean {
+        val white = parseList(cfgString(Prefs.Keys.AGENT_BUBBLE_WHITELIST_JSON, "[]"))
+        val black = parseList(cfgString(Prefs.Keys.AGENT_BUBBLE_BLACKLIST_JSON, "[]"))
+        if (packageName in black) return false
+        if (white.isNotEmpty() && packageName !in white) return false
+        return true
+    }
+
+    private fun orientationKey(keyPortrait: String, keyLandscape: String): String {
+        val context = host ?: return keyPortrait
+        val landscape = context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        return if (landscape) keyLandscape else keyPortrait
+    }
+
     private fun onNotificationPosted(sbn: StatusBarNotification) {
         val context = host ?: return
+        if (!cfgBool(Prefs.Keys.AGENT_BUBBLE_NOTIFICATIONS, true)) return
+        if (!allowed(sbn.packageName)) return
         val notification = sbn.notification ?: return
         val flags = notification.flags
         if (flags and android.app.Notification.FLAG_ONGOING_EVENT != 0) return
@@ -208,11 +264,14 @@ internal object BubbleHook {
     }
 
     private fun showCard(entry: Entry) {
+        if (!cfgBool(Prefs.Keys.AGENT_BUBBLE_PREVIEW_ENABLED, true)) return
+        if (cfgBool(Prefs.Keys.AGENT_BUBBLE_EDGE_ONLY, false) && !docked) return
         val context = host ?: return
         val manager = window ?: return
         val view = card ?: createCard(context) ?: return
         val layoutParams = cardParams ?: return
         view.bind(entry.icon, entry.title, entry.text, queue.size, queue.size > 1)
+        applyCardSize(context, layoutParams)
         positionCard(manager, layoutParams, view)
         view.visibility = android.view.View.VISIBLE
         view.alpha = 1f
@@ -220,7 +279,38 @@ internal object BubbleHook {
         view.scaleY = 0.92f
         view.animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
         handler.removeCallbacks(hideCardRunnable)
-        handler.postDelayed(hideCardRunnable, CARD_TIMEOUT_MS)
+        handler.postDelayed(hideCardRunnable, cardTimeoutMs(entry))
+    }
+
+    /** 卡片宽度：配置值（180–360dp）与会话自适应二选一，都不超过屏宽-20dp。 */
+    private fun applyCardSize(context: Context, layoutParams: WindowManager.LayoutParams) {
+        val manager = window ?: return
+        val density = context.resources.displayMetrics.density
+        val metrics = manager.currentWindowMetrics
+        val maxWidth = minOf((360 * density).toInt(), metrics.bounds.width() - (20 * density).toInt())
+        var width = ((cfgInt(Prefs.Keys.AGENT_BUBBLE_WIDTH_DP, 360).coerceIn(180, 360)) * density).toInt()
+        width = minOf(width, maxWidth)
+        if (cfgBool(Prefs.Keys.AGENT_BUBBLE_AUTO_WIDTH, false)) {
+            val entry = queue.firstOrNull()
+            if (entry != null) {
+                val paint = android.graphics.Paint()
+                paint.textSize = 13f * density
+                val measured = maxOf(paint.measureText(entry.text), paint.measureText(entry.title))
+                val padding = (34 + 10 + 20 + 16) * density
+                width = (measured + padding).toInt().coerceIn((180 * density).toInt(), maxWidth)
+            }
+        }
+        layoutParams.width = width
+        layoutParams.height = BubbleCardLayer.heightPx(context)
+    }
+
+    /** 停留时长：配置 2–15 秒；开启动态时长时按文本长度加档（最多 +6 秒）。 */
+    private fun cardTimeoutMs(entry: Entry): Long {
+        val seconds = cfgInt(Prefs.Keys.AGENT_BUBBLE_TIMEOUT_SEC, 8).coerceIn(2, 15)
+        if (!cfgBool(Prefs.Keys.AGENT_BUBBLE_DYNAMIC_TIMEOUT, true)) return seconds * 1000L
+        val length = entry.text.length + entry.title.length
+        val extra = (length / 20).coerceIn(0, 6)
+        return (seconds + extra).coerceAtMost(20) * 1000L
     }
 
     private fun updateCardContent(entry: Entry) {
@@ -357,8 +447,19 @@ internal object BubbleHook {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             val metrics = manager.currentWindowMetrics
-            x = metrics.bounds.width() - size - (16 * density).toInt()
-            y = (metrics.bounds.height() * 0.35f).toInt()
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
+            )
+            // 位置记忆按百分比（原模块 portrait_x/y_percent + dock_edge），横竖屏各存一份
+            val xPercent = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_X_PERCENT, Prefs.Keys.AGENT_BUBBLE_LAND_X_PERCENT), 100)
+            val yPercent = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_Y_PERCENT, Prefs.Keys.AGENT_BUBBLE_LAND_Y_PERCENT), 35)
+            val dock = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_DOCK_EDGE, Prefs.Keys.AGENT_BUBBLE_LAND_DOCK_EDGE), 0)
+            val usableWidth = (metrics.bounds.width() - insets.left - insets.right - size).coerceAtLeast(1)
+            val usableHeight = (metrics.bounds.height() - insets.top - insets.bottom - size).coerceAtLeast(1)
+            x = insets.left + (xPercent * usableWidth / 100)
+            y = insets.top + (yPercent * usableHeight / 100)
+            if (dock < 0) x = -size / 2
+            if (dock > 0) x = metrics.bounds.width() - size / 2
             windowAnimations = 0
         }
         val view = BubbleBallLayer(context, false)
@@ -368,8 +469,43 @@ internal object BubbleHook {
             window = manager
             ball = view
             params = layoutParams
+            startBreathing(view)
+            wakeScreenIfNeeded(context)
             view
         }.onFailure { logger?.warn("BubbleHook addView failed: ${it.javaClass.simpleName}") }.getOrNull()
+    }
+
+    /** 对齐 decoration_continuous：球静止时做一次缓慢的呼吸缩放，关闭开关则保持静止。 */
+    private fun startBreathing(view: BubbleBallLayer) {
+        breathAnimator?.cancel()
+        breathAnimator = null
+        if (!cfgBool(Prefs.Keys.AGENT_BUBBLE_DECORATION, true)) return
+        breathAnimator = android.animation.ValueAnimator.ofFloat(1f, 1.03f).apply {
+            duration = 1600L
+            repeatMode = android.animation.ValueAnimator.REVERSE
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            addUpdateListener { animator ->
+                val scale = animator.animatedValue as Float
+                view.scaleX = scale
+                view.scaleY = scale
+            }
+            start()
+        }
+    }
+
+    /** 对齐 screen_awake_prompt：灭屏时来通知先点亮屏幕几秒。 */
+    private fun wakeScreenIfNeeded(context: Context) {
+        if (!cfgBool(Prefs.Keys.AGENT_BUBBLE_WAKE_SCREEN, true)) return
+        runCatching {
+            val power = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return
+            if (power.isInteractive) return
+            val lock = power.newWakeLock(
+                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                    android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "Eta:bubble-wake",
+            )
+            lock.acquire(3000L)
+        }
     }
 
     private fun removeBall() {
@@ -503,7 +639,7 @@ internal object BubbleHook {
             return
         }
         val center = current.x + current.width / 2f
-        val docked = when {
+        val isDocked = when {
             center <= edge -> {
                 dock(current, view, manager, -1, screenWidth)
                 true
@@ -514,7 +650,8 @@ internal object BubbleHook {
             }
             else -> false
         }
-        if (!docked) {
+        docked = isDocked
+        if (!isDocked) {
             current.x = current.x.coerceIn(
                 (insets.left + margin).toInt(),
                 (screenWidth - insets.right - current.width - margin).coerceAtLeast(0f).toInt(),
@@ -524,7 +661,7 @@ internal object BubbleHook {
         view.animate()
             .cancel()
         view.animate()
-            .alpha(if (docked) 0.5f else 1f)
+            .alpha(if (isDocked) 0.5f else 1f)
             .scaleX(1f)
             .scaleY(1f)
             .setDuration(220L)
@@ -634,8 +771,14 @@ internal object BubbleHook {
         logger?.info("BubbleHook: open ${entry.packageName} sent=$sent")
     }
 
-    /** 下滑：关闭队头（对齐 dismissQueuedNotification）。 */
+    /** 下滑：关闭队头（对齐 dismissQueuedNotification），可选地清掉状态栏通知。 */
     private fun onSwipeDown() {
+        if (cfgBool(Prefs.Keys.AGENT_BUBBLE_CLEAR_ON_SWIPE, false)) {
+            runCatching {
+                val manager = host?.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                manager?.cancelAll()
+            }
+        }
         queue.pollFirst()
         swipeIndex = 0
         val view = ball
