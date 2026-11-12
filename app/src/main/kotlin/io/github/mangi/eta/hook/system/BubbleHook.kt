@@ -38,6 +38,11 @@ internal object BubbleHook {
     private const val SWIPE_DP = 38f
     private const val CENTER_TAP_DP = 37f
     private const val CARD_TIMEOUT_MS = 8_000L
+    /** 原模块 timeout_seconds（3–15 秒）的默认档，用于超时淡化。 */
+    private const val BALL_DIM_DELAY_MS = 6_000L
+    private val dimRunnable = Runnable {
+        ball?.animate()?.alpha(0.35f)?.setDuration(180L)?.start()
+    }
 
     private val handler = Handler(Looper.getMainLooper())
     private val queue = ArrayDeque<Entry>()
@@ -163,6 +168,9 @@ internal object BubbleHook {
         val view = ball ?: createBall(context) ?: return
         view.bind(current.icon, queue.size)
         view.visibility = android.view.View.VISIBLE
+        // 对齐 r0 的超时淡化：静止一段时间后压到 0.35，触摸立刻恢复
+        handler.removeCallbacks(dimRunnable)
+        handler.postDelayed(dimRunnable, BALL_DIM_DELAY_MS)
         if (showCard) {
             showCard(current)
         } else {
@@ -386,6 +394,7 @@ internal object BubbleHook {
                 dragging = false
                 longPressed = false
                 view.alpha = 1f
+                handler.removeCallbacks(dimRunnable)
                 handler.postDelayed(holdRunnable, HOLD_MS)
                 return true
             }
