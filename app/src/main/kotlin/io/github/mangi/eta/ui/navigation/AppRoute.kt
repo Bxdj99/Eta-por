@@ -22,15 +22,6 @@ sealed interface AppRoute : NavKey {
     data object WebToolsSettings : AppRoute
 
     @Serializable
-    data object BubbleSettings : AppRoute
-
-    @Serializable
-    data class BubbleAppPicker(val mode: String = "black") : AppRoute
-
-    @Serializable
-    data object BubblePlacement : AppRoute
-
-    @Serializable
     data object Skills : AppRoute
 
     @Serializable

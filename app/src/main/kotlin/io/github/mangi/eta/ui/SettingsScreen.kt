@@ -32,7 +32,6 @@ import androidx.compose.material.icons.rounded.Inventory
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Lock
@@ -100,7 +99,6 @@ import io.github.mangi.eta.ui.components.MiuixDialogActions
 import io.github.mangi.eta.ui.components.MiuixScaffoldPage
 import io.github.mangi.eta.ui.components.StatusSuccess
 import io.github.mangi.eta.ui.components.StatusWarning
-import io.github.mangi.eta.ui.components.coui.CouiSliderPreference
 import kotlin.math.roundToInt
 import io.github.mangi.eta.ui.components.coui.CouiConfirmDialog
 import io.github.mangi.eta.ui.components.coui.CouiDropdownPreference
@@ -485,16 +483,6 @@ private fun SettingsPageContent(
                         key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_ENABLED,
                         icon = Icons.Rounded.Layers,
                         iconTint = SettingsIconColors.Blue,
-                    )
-                    CouiIconDivider()
-                    CouiPreference(
-                        title = "通知气泡",
-                        summary = "气泡宽度、停留时长、不透明度、手势",
-                        value = if (Prefs.isEnabled(Prefs.Keys.AGENT_BUBBLE_NOTIFICATIONS)) "已开启" else "已关闭",
-                        icon = {
-                            CouiSettingsIcon(Icons.Rounded.NotificationsActive, SettingsIconColors.Green)
-                        },
-                        onClick = { onNavigate(AppRoute.BubbleSettings) },
                     )
                     CouiIconDivider()
                     SwitchPref(

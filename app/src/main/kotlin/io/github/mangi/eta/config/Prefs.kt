@@ -58,77 +58,6 @@ internal object Prefs {
         const val AGENT_RUNTIME_CONFIG_JSON = "agent_runtime_config_json"
         const val AGENT_DISABLED_TOOLS_JSON = "agent_disabled_tools_json"
 
-        /** 通知到达时是否在屏幕上弹出气泡（Bubble Notifications 的原生重实现）。 */
-        const val AGENT_BUBBLE_NOTIFICATIONS = "agent_bubble_notifications"
-
-        /** 气泡排除的应用包名，JSON 数组字符串。 */
-        const val AGENT_BUBBLE_EXCLUDED_JSON = "agent_bubble_excluded_json"
-
-        /** 气泡窗口位置记忆，格式 "x,y"（绝对像素，窗口左上角）。 */
-        const val AGENT_BUBBLE_POSITION = "agent_bubble_position"
-
-        /** 气泡宽度上限（dp），对应原模块 content_preview_width_dp。 */
-        const val AGENT_BUBBLE_WIDTH_DP = "agent_bubble_width_dp"
-
-        /** 气泡停留时长（秒），对应原模块 content_preview_timeout。 */
-        const val AGENT_BUBBLE_TIMEOUT_SEC = "agent_bubble_timeout_sec"
-
-        /** 气泡背景不透明度（百分比），对应原模块 content_preview_overlay_alpha。 */
-        const val AGENT_BUBBLE_OPACITY_PCT = "agent_bubble_opacity_pct"
-
-        // ---- 以下对应原模块 BubbleSettingsActivity 的完整开关集 ----
-
-        /** 是否显示通知内容卡片（原 content_preview_enabled）。 */
-        const val AGENT_BUBBLE_PREVIEW_ENABLED = "agent_bubble_preview_enabled"
-
-        /** 卡片宽度随文字自适应（原 content_preview_auto_width）。 */
-        const val AGENT_BUBBLE_AUTO_WIDTH = "agent_bubble_auto_width"
-
-        /** 卡片停留时长随文字长度变化（原 content_preview_dynamic_timeout）。 */
-        const val AGENT_BUBBLE_DYNAMIC_TIMEOUT = "agent_bubble_dynamic_timeout"
-
-        /** 只有球贴边时才弹卡片（原 content_preview_edge_only）。 */
-        const val AGENT_BUBBLE_EDGE_ONLY = "agent_bubble_edge_only"
-
-        /** 卡片方位偏好：0 自动、1 上、2 下、3 左、4 右（原 content_preview_position）。 */
-        const val AGENT_BUBBLE_PREVIEW_POSITION = "agent_bubble_preview_position"
-
-        /** 静置超时后球变暗（原 bubble_timeout_dim）。 */
-        const val AGENT_BUBBLE_TIMEOUT_DIM = "agent_bubble_timeout_dim"
-
-        /** 静置超时后球自动消失（原 bubble_auto_dismiss）。 */
-        const val AGENT_BUBBLE_AUTO_DISMISS = "agent_bubble_auto_dismiss"
-
-        /** 球的装饰光晕连续动画（原 decoration_continuous）。 */
-        const val AGENT_BUBBLE_DECORATION = "agent_bubble_decoration"
-
-        /** 出现气泡时点亮屏幕（原 screen_awake_prompt）。 */
-        const val AGENT_BUBBLE_WAKE_SCREEN = "agent_bubble_wake_screen"
-
-        /** 状态栏文字滚动显示通知内容（原 status_scroll_enabled）。 */
-        const val AGENT_BUBBLE_STATUS_SCROLL = "agent_bubble_status_scroll"
-
-        /** 状态栏滚动轮数 1–5（原 status_scroll_rounds）。 */
-        const val AGENT_BUBBLE_STATUS_ROUNDS = "agent_bubble_status_rounds"
-
-        /** 下滑关闭时顺手清掉状态栏通知（原 clear_status_on_down_swipe）。 */
-        const val AGENT_BUBBLE_CLEAR_ON_SWIPE = "agent_bubble_clear_on_swipe"
-
-        /** 白名单 JSON（为空表示不启用白名单）。 */
-        const val AGENT_BUBBLE_WHITELIST_JSON = "agent_bubble_whitelist_json"
-
-        /** 黑名单 JSON。 */
-        const val AGENT_BUBBLE_BLACKLIST_JSON = "agent_bubble_blacklist_json"
-
-        /** 竖屏位置百分比与停靠边（原 portrait_*）。 */
-        const val AGENT_BUBBLE_X_PERCENT = "agent_bubble_x_percent"
-        const val AGENT_BUBBLE_Y_PERCENT = "agent_bubble_y_percent"
-        const val AGENT_BUBBLE_DOCK_EDGE = "agent_bubble_dock_edge"
-
-        /** 横屏位置百分比与停靠边（原 landscape_*）。 */
-        const val AGENT_BUBBLE_LAND_X_PERCENT = "agent_bubble_land_x_percent"
-        const val AGENT_BUBBLE_LAND_Y_PERCENT = "agent_bubble_land_y_percent"
-        const val AGENT_BUBBLE_LAND_DOCK_EDGE = "agent_bubble_land_dock_edge"
 
         /** 全部布尔开关及其默认值。 */
         val BOOLEAN_DEFAULTS: Map<String, Boolean> = mapOf(
@@ -152,17 +81,6 @@ internal object Prefs {
             AGENT_VIRTUAL_DISPLAY_ENABLED to true,
             AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE to true,
             AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD to true,
-            AGENT_BUBBLE_NOTIFICATIONS to true,
-            AGENT_BUBBLE_PREVIEW_ENABLED to true,
-            AGENT_BUBBLE_AUTO_WIDTH to false,
-            AGENT_BUBBLE_DYNAMIC_TIMEOUT to true,
-            AGENT_BUBBLE_EDGE_ONLY to false,
-            AGENT_BUBBLE_TIMEOUT_DIM to true,
-            AGENT_BUBBLE_AUTO_DISMISS to false,
-            AGENT_BUBBLE_DECORATION to true,
-            AGENT_BUBBLE_WAKE_SCREEN to true,
-            AGENT_BUBBLE_STATUS_SCROLL to true,
-            AGENT_BUBBLE_CLEAR_ON_SWIPE to false,
         )
 
         /** 由 Eta Runtime 最终裁决、不要求 Xposed 框架在线的开关。 */
@@ -178,17 +96,6 @@ internal object Prefs {
             AGENT_VIRTUAL_DISPLAY_ENABLED,
             AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE,
             AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
-            AGENT_BUBBLE_NOTIFICATIONS,
-            AGENT_BUBBLE_PREVIEW_ENABLED,
-            AGENT_BUBBLE_AUTO_WIDTH,
-            AGENT_BUBBLE_DYNAMIC_TIMEOUT,
-            AGENT_BUBBLE_EDGE_ONLY,
-            AGENT_BUBBLE_TIMEOUT_DIM,
-            AGENT_BUBBLE_AUTO_DISMISS,
-            AGENT_BUBBLE_DECORATION,
-            AGENT_BUBBLE_WAKE_SCREEN,
-            AGENT_BUBBLE_STATUS_SCROLL,
-            AGENT_BUBBLE_CLEAR_ON_SWIPE,
         )
     }
 
@@ -243,20 +150,6 @@ internal object Prefs {
     fun getAgentInt(key: String, default: Int): Int =
         runCatching { localAgent?.getInt(key, default) ?: default }.getOrDefault(default)
 
-    /** Hook 进程读取整型配置：SystemUI 里 localAgent 不初始化，只能读框架下发的 remote。 */
-    fun getRemoteInt(key: String, default: Int): Int =
-        runCatching { remote?.getInt(key, default) ?: default }.getOrDefault(default)
-
-    /** Hook 进程读取字符串配置。 */
-    fun getRemoteString(key: String, default: String): String =
-        runCatching { remote?.getString(key, default) ?: default }.getOrDefault(default)
-
-    /** UI 进程写入整型配置，并在 remote 可用时同步下发，让 Hook 侧立刻拿到。 */
-    fun setBubbleInt(key: String, value: Int): Boolean {
-        val localOk = runCatching { localAgent?.edit()?.putInt(key, value)?.commit() }.getOrDefault(false) == true
-        runCatching { remote?.edit()?.putInt(key, value)?.commit() }
-        return localOk
-    }
 
     /** UI 进程写入字符串配置（黑白名单等），同步下发。 */
     fun setBubbleString(key: String, value: String): Boolean {
@@ -315,47 +208,6 @@ internal object Prefs {
                 }
                 remotePreferences.contains(key) -> {
                     localEditor.putBoolean(key, remotePreferences.getBoolean(key, default))
-                    updateLocal = true
-                }
-            }
-        }
-        // 气泡的数值/字符串参数：以 local 为准，同步下发 remote，SystemUI hook 侧才能读到
-        listOf(
-            Keys.AGENT_BUBBLE_WIDTH_DP to 360,
-            Keys.AGENT_BUBBLE_TIMEOUT_SEC to 8,
-            Keys.AGENT_BUBBLE_OPACITY_PCT to 100,
-            Keys.AGENT_BUBBLE_STATUS_ROUNDS to 2,
-            Keys.AGENT_BUBBLE_PREVIEW_POSITION to 0,
-            Keys.AGENT_BUBBLE_X_PERCENT to 100,
-            Keys.AGENT_BUBBLE_Y_PERCENT to 35,
-            Keys.AGENT_BUBBLE_DOCK_EDGE to 0,
-            Keys.AGENT_BUBBLE_LAND_X_PERCENT to 100,
-            Keys.AGENT_BUBBLE_LAND_Y_PERCENT to 35,
-            Keys.AGENT_BUBBLE_LAND_DOCK_EDGE to 0,
-        ).forEach { (key, default) ->
-            when {
-                local.contains(key) -> {
-                    remoteEditor.putInt(key, local.getInt(key, default))
-                    updateRemote = true
-                }
-                remotePreferences.contains(key) -> {
-                    localEditor.putInt(key, remotePreferences.getInt(key, default))
-                    updateLocal = true
-                }
-            }
-        }
-        listOf(
-            Keys.AGENT_BUBBLE_WHITELIST_JSON to "[]",
-            Keys.AGENT_BUBBLE_BLACKLIST_JSON to "[]",
-            Keys.AGENT_BUBBLE_EXCLUDED_JSON to "[]",
-        ).forEach { (key, default) ->
-            when {
-                local.contains(key) -> {
-                    remoteEditor.putString(key, local.getString(key, default))
-                    updateRemote = true
-                }
-                remotePreferences.contains(key) -> {
-                    localEditor.putString(key, remotePreferences.getString(key, default))
                     updateLocal = true
                 }
             }

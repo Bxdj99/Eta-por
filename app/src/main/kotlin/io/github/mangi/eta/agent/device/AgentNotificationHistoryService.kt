@@ -12,8 +12,6 @@ class AgentNotificationHistoryService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         record(sbn)
-        // 气泡只是视觉层：放在 record 之后，任何异常都不影响通知入库
-        io.github.mangi.eta.agent.overlay.BubbleNotificationOverlay.onPosted(this, sbn)
         // 有通知说明系统已经醒着，零成本补跑过期任务
         io.github.mangi.eta.agent.automation.AgentTaskScheduler.opportunisticRun(this)
     }
@@ -22,10 +20,6 @@ class AgentNotificationHistoryService : NotificationListenerService() {
         super.onListenerConnected()
         connectedService = this
         activeNotifications?.forEach(::record)
-        runCatching {
-            java.io.File(filesDir, "bubble_debug.log")
-                .appendText("${System.currentTimeMillis()} listener connected\n")
-        }
     }
 
     override fun onListenerDisconnected() {

@@ -32,7 +32,6 @@ internal object SystemUiHooks {
         val logger = hooks.logger
         return hooks.install {
             systemUiClassLoader = classLoader
-            BubbleHook.install(hooks, classLoader, logger)
             val businessClass = HookSupport.findClassOrNull(classLoader, ModuleConfig.OCR_BUSINESS_CLASS)
             val onLongPressedMethod = businessClass?.let {
                 HookSupport.findMethod(it, "onLongPressed")
