@@ -21,39 +21,38 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
 import io.github.mangi.eta.config.Prefs
 import org.json.JSONArray
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
  * 通知气泡（Bubble Notifications 的原生重实现）。
  *
- * 视觉参数照抄原 LSPosed 模块（io.github.freeform.bubble 1.9.9 的 C0 类）：
- * 18dp 圆角、三色纵向渐变背景、1dp 描边、8dp elevation、10dp/7dp 内边距、
- * 34dp 图标 + 10dp 右距、10sp 标题（次级色）、13sp 正文（主色）、正文 2dp 上间距、
- * 宽度 = min(360dp, 屏宽 - 20dp) 且不小于 180dp，高度下限 58dp。
+ * 视觉参数照抄原模块 C0：18dp 圆角、三色纵向渐变、1dp 描边 + 1.05dp 高光、
+ * 8dp elevation、10dp/7dp 内边距、34dp 图标 + 10dp 右距、10sp 标题 / 13sp 正文、
+ * 宽度 = min(配置宽度, 屏宽 - 20dp)，三角裁剪展开动画。
  *
- * 与原模块的差别仅在承载方式：模块 hook 进 SystemUI 改通知面板；这里走
- * NotificationListenerService + 悬浮窗，只画气泡、不动系统 UI，不新增常驻进程。
+ * 手势：上滑看上一条（通知栈）、下滑关闭当前、长按收成悬浮球、点击打开应用；
+ * 球态下点击展开、拖动移动位置。
  */
 internal object BubbleNotificationOverlay {
 
-    private const val TAG = "EtaBubble"
-    private const val MAX_BUBBLES = 3
-    private const val AUTO_DISMISS_MS = 8_000L
+    private const val MAX_HISTORY = 10
     private const val BUBBLE_GAP_DP = 8
-    private const val SWIPE_DISMISS_DP = 24
-    private const val DRAG_HOLD_MS = 400L
+    private const val SWIPE_THRESHOLD_DP = 24
+    private const val HOLD_MS = 400L
+    private const val BALL_SIZE_DP = 56
 
     // 照抄原模块 C0 的尺寸（dp/sp）
     private const val MAX_WIDTH_DP = 360
     private const val MIN_WIDTH_DP = 180
     private const val SIDE_MARGIN_DP = 20
-    private const val MIN_HEIGHT_DP = 58
     private const val CORNER_RADIUS_DP = 18
     private const val CONTENT_PADDING_H_DP = 10
     private const val CONTENT_PADDING_V_DP = 7
@@ -69,11 +68,16 @@ internal object BubbleNotificationOverlay {
 
     private var windowManager: WindowManager? = null
     private var params: WindowManager.LayoutParams? = null
-    private var container: BubbleContainer? = null
-    private val bubbles = ArrayList<BubbleEntry>()
+    private var stage: BubbleStage? = null
+
+    /** 通知栈：上滑看更早的一条，下滑关闭当前。 */
+    private val history = ArrayList<BubbleEntry>()
+    private var currentIndex = -1
+    private var collapsed = false
+
     private val dismissRunnable = Runnable { dismissAll(animate = true) }
 
-    /** 通知监听回调入口；主线程执行，异常一律吞掉，绝不影响通知入库。 */
+    /** 通知监听回调入口；异常一律吞掉，绝不影响通知入库。 */
     fun onPosted(context: Context, sbn: StatusBarNotification) {
         runCatching {
             prime(context)
@@ -86,11 +90,12 @@ internal object BubbleNotificationOverlay {
 
     fun dismissAll(animate: Boolean = false) {
         handler.removeCallbacks(dismissRunnable)
-        val target = container ?: run {
-            bubbles.clear()
+        val target = stage ?: run {
+            history.clear()
+            currentIndex = -1
             return
         }
-        if (animate && bubbles.isNotEmpty()) {
+        if (animate && !collapsed) {
             target.animate().alpha(0f).setDuration(160L).withEndAction { detach() }.start()
         } else {
             detach()
@@ -152,17 +157,19 @@ internal object BubbleNotificationOverlay {
         }
 
     private fun show(context: Context, entry: BubbleEntry) {
-        if (container == null && !attach(context)) {
+        if (stage == null && !attach(context)) {
             debug(context, "attach failed for ${entry.packageName}")
             return
         }
-        val stack = container ?: return
-        bubbles.removeAll { it.key == entry.key }
-        while (bubbles.size >= MAX_BUBBLES) bubbles.removeAt(0)
-        bubbles.add(entry)
-        stack.alpha = 1f
-        stack.render(bubbles, animateLast = true)
-        resizeWindow()
+        history.removeAll { it.key == entry.key }
+        while (history.size >= MAX_HISTORY) history.removeAt(0)
+        history.add(entry)
+        currentIndex = history.size - 1
+        if (collapsed) {
+            // 收到新通知时从球展开
+            collapsed = false
+        }
+        renderCurrent(animate = true)
         scheduleDismiss()
     }
 
@@ -174,14 +181,122 @@ internal object BubbleNotificationOverlay {
         handler.postDelayed(dismissRunnable, seconds * 1000L)
     }
 
+    /** 渲染当前栈位置的那一条；[animate] 时播放展开动画。 */
+    private fun renderCurrent(animate: Boolean) {
+        val host = stage ?: return
+        val entry = history.getOrNull(currentIndex)
+        if (entry == null) {
+            detach()
+            return
+        }
+        collapsed = false
+        host.showCard(entry, currentIndex > 0, history.size, animate)
+        resizeWindow(cardWidthPx(host.context), WindowManager.LayoutParams.WRAP_CONTENT)
+    }
+
+    private fun collapseToBall() {
+        val host = stage ?: return
+        val entry = history.getOrNull(currentIndex) ?: return
+        collapsed = true
+        host.showBall(entry, history.size)
+        resizeWindow(dp(host.context, BALL_SIZE_DP), dp(host.context, BALL_SIZE_DP))
+        handler.removeCallbacks(dismissRunnable)
+    }
+
+    private fun expandFromBall() {
+        if (!collapsed) return
+        collapsed = false
+        renderCurrent(animate = true)
+        scheduleDismiss()
+    }
+
+    private fun moveBy(dx: Int, dy: Int) {
+        val current = params ?: return
+        current.x += dx
+        current.y += dy
+        val stack = stage ?: return
+        val manager = windowManager ?: return
+        runCatching { manager.updateViewLayout(stack, current) }
+    }
+
+    private fun snapToEdge() {
+        val current = params ?: return
+        val stack = stage ?: return
+        val manager = windowManager ?: return
+        val metrics = runCatching { manager.currentWindowMetrics }.getOrNull() ?: return
+        val screenWidth = metrics.bounds.width()
+        val screenHeight = metrics.bounds.height()
+        val margin = dp(stack.context, 8)
+        current.x = if (current.x + current.width / 2 < screenWidth / 2) margin else screenWidth - current.width - margin
+        current.y = current.y.coerceIn(margin, (screenHeight - stack.height - margin).coerceAtLeast(margin))
+        runCatching { manager.updateViewLayout(stack, current) }
+        Prefs.localAgentPreferences()?.edit()
+            ?.putString(Prefs.Keys.AGENT_BUBBLE_POSITION, "${current.x},${current.y}")
+            ?.apply()
+    }
+
+    private fun resizeWindow(width: Int, height: Int) {
+        val current = params ?: return
+        val stack = stage ?: return
+        val manager = windowManager ?: return
+        if (current.width == width && current.height == height) return
+        current.width = width
+        current.height = height
+        runCatching { manager.updateViewLayout(stack, current) }
+    }
+
+    private fun activateCurrent() {
+        val entry = history.getOrNull(currentIndex) ?: return
+        val context = hostContext(lastContext ?: return)
+        val pending = entry.contentIntent
+        if (pending != null && runCatching { pending.send() }.isSuccess) {
+            dismissCurrent()
+            return
+        }
+        runCatching {
+            val intent: Intent? = context.packageManager.getLaunchIntentForPackage(entry.packageName)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                context.startActivity(intent)
+            }
+        }
+        dismissCurrent()
+    }
+
+    /** 下滑：关闭当前一条，若栈里还有更早的就继续显示。 */
+    private fun dismissCurrent() {
+        if (currentIndex !in history.indices) {
+            dismissAll()
+            return
+        }
+        history.removeAt(currentIndex)
+        if (history.isEmpty()) {
+            currentIndex = -1
+            detach()
+            return
+        }
+        if (currentIndex >= history.size) currentIndex = history.size - 1
+        renderCurrent(animate = true)
+        scheduleDismiss()
+    }
+
+    /** 上滑：切到栈里更早的一条。 */
+    private fun showPrevious() {
+        if (currentIndex <= 0) return
+        currentIndex -= 1
+        renderCurrent(animate = true)
+        scheduleDismiss()
+    }
+
     private fun hostContext(fallback: Context): Context =
         AgentAccessibilityService.current() ?: fallback
 
     private fun attach(fallback: Context): Boolean {
         val context = hostContext(fallback)
         val manager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return false
+        val width = cardWidthPx(context)
         val layoutParams = WindowManager.LayoutParams(
-            bubbleWidthPx(context),
+            width,
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayWindowType(),
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
@@ -196,81 +311,37 @@ internal object BubbleNotificationOverlay {
             y = saved.second
             windowAnimations = 0
         }
-        val stack = BubbleContainer(context).apply {
-            onDismissAt = { index -> dismissAt(index) }
-            onActivateAt = { index -> activateAt(index) }
-            onMoveWindow = { dx, dy ->
-                val current = params
-                if (current != null) {
-                    current.x += dx
-                    current.y += dy
-                    runCatching { windowManager?.updateViewLayout(this, current) }
-                }
-            }
-            onReleaseWindow = { snapToEdge() }
+        val host = BubbleStage(context, darkMode(context)).apply {
+            onTap = { activateCurrent() }
+            onSwipeUp = { showPrevious() }
+            onSwipeDown = { dismissCurrent() }
+            onHold = { collapseToBall() }
+            onBallTap = { expandFromBall() }
+            onDrag = { dx, dy -> moveBy(dx, dy) }
+            onDragEnd = { snapToEdge() }
         }
         return runCatching {
-            manager.addView(stack, layoutParams)
+            manager.addView(host, layoutParams)
             windowManager = manager
             params = layoutParams
-            container = stack
+            stage = host
             true
         }.onFailure { debug(context, "addView failed: $it") }.getOrDefault(false)
     }
 
     private fun detach() {
-        val stack = container ?: return
-        runCatching { windowManager?.removeView(stack) }
-        container = null
+        val host = stage ?: return
+        runCatching { windowManager?.removeView(host) }
+        stage = null
         params = null
         windowManager = null
-        bubbles.clear()
+        history.clear()
+        currentIndex = -1
+        collapsed = false
         handler.removeCallbacks(dismissRunnable)
     }
 
-    private fun dismissAt(index: Int) {
-        if (index !in bubbles.indices) return
-        bubbles.removeAt(index)
-        val stack = container ?: return
-        if (bubbles.isEmpty()) {
-            detach()
-            return
-        }
-        stack.render(bubbles)
-        resizeWindow()
-        scheduleDismiss()
-    }
-
-    private fun activateAt(index: Int) {
-        val entry = bubbles.getOrNull(index) ?: return
-        val context = hostContext(lastContext ?: return)
-        dismissAt(index)
-        val pending = entry.contentIntent
-        if (pending != null) {
-            val sent = runCatching { pending.send() }.isSuccess
-            if (sent) return
-        }
-        runCatching {
-            val intent: Intent? = context.packageManager.getLaunchIntentForPackage(entry.packageName)
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-                context.startActivity(intent)
-            }
-        }
-    }
-
-    private fun resizeWindow() {
-        val stack = container ?: return
-        val current = params ?: return
-        val manager = windowManager ?: return
-        val width = bubbleWidthPx(stack.context)
-        if (current.width == width) return
-        current.width = width
-        runCatching { manager.updateViewLayout(stack, current) }
-    }
-
-    /** 原模块公式：宽度 = min(配置宽度, 屏宽 - inset - 20dp)，且不小于 180dp。 */
-    private fun bubbleWidthPx(context: Context): Int {
+    private fun cardWidthPx(context: Context): Int {
         val density = context.resources.displayMetrics.density
         val manager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         val metrics = runCatching { manager?.currentWindowMetrics }.getOrNull()
@@ -282,26 +353,8 @@ internal object BubbleNotificationOverlay {
         val configuredDp = runCatching {
             Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_WIDTH_DP, MAX_WIDTH_DP)
         }.getOrDefault(MAX_WIDTH_DP).coerceIn(MIN_WIDTH_DP, MAX_WIDTH_DP)
-        val maxWidth = (configuredDp * density).toInt()
-        val available = (screenWidth - horizontalInset - (SIDE_MARGIN_DP * density).toInt())
-        val minWidth = (MIN_WIDTH_DP * density).toInt()
-        return min(maxWidth, available).coerceAtLeast(minWidth)
-    }
-
-    private fun snapToEdge() {
-        val current = params ?: return
-        val stack = container ?: return
-        val manager = windowManager ?: return
-        val metrics = runCatching { manager.currentWindowMetrics }.getOrNull() ?: return
-        val screenWidth = metrics.bounds.width()
-        val screenHeight = metrics.bounds.height()
-        val margin = (8 * stack.resources.displayMetrics.density).toInt()
-        current.x = if (current.x + current.width / 2 < screenWidth / 2) margin else screenWidth - current.width - margin
-        current.y = current.y.coerceIn(margin, (screenHeight - stack.height - margin).coerceAtLeast(margin))
-        runCatching { manager.updateViewLayout(stack, current) }
-        Prefs.localAgentPreferences()?.edit()
-            ?.putString(Prefs.Keys.AGENT_BUBBLE_POSITION, "${current.x},${current.y}")
-            ?.apply()
+        val available = screenWidth - horizontalInset - dp(context, SIDE_MARGIN_DP)
+        return min((configuredDp * density).toInt(), available).coerceAtLeast(dp(context, MIN_WIDTH_DP))
     }
 
     private fun savedPosition(context: Context, width: Int): Pair<Int, Int> {
@@ -330,6 +383,13 @@ internal object BubbleNotificationOverlay {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         }
 
+    private fun darkMode(context: Context): Boolean =
+        (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    private fun dp(context: Context, value: Int): Int =
+        (value * context.resources.displayMetrics.density).toInt()
+
     private fun debug(context: Context, message: String) {
         runCatching {
             val file = java.io.File(context.filesDir, "bubble_debug.log")
@@ -340,6 +400,10 @@ internal object BubbleNotificationOverlay {
 
     @Volatile
     private var lastContext: Context? = null
+
+    fun prime(context: Context) {
+        lastContext = context.applicationContext
+    }
 
     internal data class BubbleEntry(
         val key: String,
@@ -353,47 +417,97 @@ internal object BubbleNotificationOverlay {
     )
 
     /**
-     * 气泡容器：垂直排列最多 [MAX_BUBBLES] 张卡片。
-     * 卡片本身照抄原模块的横向 LinearLayout 结构（图标 + 标题/正文两行）。
+     * 承载卡片与悬浮球两种形态的容器，负责全部手势。
+     *
+     * 展开态：上滑看上一条、下滑关闭、长按收成球、点击打开应用。
+     * 球态：点击展开、拖动移动位置。
      */
     @SuppressLint("ViewConstructor")
-    private class BubbleContainer(context: Context) : LinearLayout(context) {
+    private class BubbleStage(context: Context, private val dark: Boolean) : FrameLayout(context) {
 
-        var onDismissAt: ((Int) -> Unit)? = null
-        var onActivateAt: ((Int) -> Unit)? = null
-        var onMoveWindow: ((Int, Int) -> Unit)? = null
-        var onReleaseWindow: (() -> Unit)? = null
+        var onTap: (() -> Unit)? = null
+        var onSwipeUp: (() -> Unit)? = null
+        var onSwipeDown: (() -> Unit)? = null
+        var onHold: (() -> Unit)? = null
+        var onBallTap: (() -> Unit)? = null
+        var onDrag: ((Int, Int) -> Unit)? = null
+        var onDragEnd: (() -> Unit)? = null
 
         private val density = resources.displayMetrics.density
-        private val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
+        private var cardView: BubbleCard? = null
+        private var ballView: View? = null
 
         private var downX = 0f
         private var downY = 0f
-        private var activeIndex = -1
-        private var dragging = false
         private var lastRawX = 0f
         private var lastRawY = 0f
-        private val dragRunnable = Runnable {
-            if (activeIndex >= 0) dragging = true
+        private var dragging = false
+        private var held = false
+        private var swiped = false
+        private var ballMode = false
+
+        private val holdRunnable = Runnable {
+            held = true
+            if (!ballMode) onHold?.invoke()
         }
 
-        init {
-            orientation = VERTICAL
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-        }
-
-        fun render(entries: List<BubbleEntry>, animateLast: Boolean = false) {
+        fun showCard(entry: BubbleEntry, hasPrevious: Boolean, count: Int, animate: Boolean) {
+            ballMode = false
             removeAllViews()
-            entries.forEachIndexed { index, entry ->
-                addView(buildCard(entry), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                    if (index > 0) topMargin = dp(BUBBLE_GAP_DP)
-                })
-            }
-            if (animateLast) (getChildAt(childCount - 1) as? BubbleCard)?.let(::revealCard)
+            val card = BubbleCard(context, dark, hasPrevious, count)
+            card.bind(entry, dark)
+            addView(card, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            cardView = card
+            ballView = null
+            alpha = 1f
+            if (animate) revealCard(card)
         }
 
-        /** 照抄原模块的展开动画：330ms，三角形裁剪从边缘扫入 + 从 0.6 放大到 1。 */
+        fun showBall(entry: BubbleEntry, count: Int) {
+            ballMode = true
+            removeAllViews()
+            val ball = FrameLayout(context)
+            val size = dp(BALL_SIZE_DP)
+            val circle = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                if (dark) {
+                    colors = intArrayOf(Color.rgb(57, 72, 84), Color.rgb(27, 39, 49))
+                    setStroke(dp(1), Color.argb(200, 104, 133, 151))
+                } else {
+                    colors = intArrayOf(Color.rgb(255, 255, 255), Color.rgb(196, 222, 240))
+                    setStroke(dp(1), Color.argb(210, 205, 225, 235))
+                }
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            }
+            ball.background = circle
+            ball.elevation = dp(ELEVATION_DP).toFloat()
+            entry.icon?.let { icon ->
+                val imageView = ImageView(context)
+                val cloned = runCatching { icon.constantState?.newDrawable()?.mutate() ?: icon }.getOrDefault(icon)
+                imageView.setImageDrawable(cloned)
+                imageView.scaleType = ImageView.ScaleType.CENTER_CROP
+                val pad = (size * 0.18f).toInt()
+                ball.addView(imageView, LayoutParams(size - pad * 2, size - pad * 2, Gravity.CENTER))
+            }
+            if (count > 1) {
+                val badge = TextView(context).apply {
+                    text = count.toString()
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    setTextColor(Color.WHITE)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(Color.rgb(232, 66, 66))
+                    }
+                    gravity = Gravity.CENTER
+                }
+                val badgeSize = (size * 0.4f).toInt()
+                ball.addView(badge, LayoutParams(badgeSize, badgeSize, Gravity.TOP or Gravity.END))
+            }
+            addView(ball, LayoutParams(size, size))
+            cardView = null
+            ballView = ball
+        }
+
         private fun revealCard(card: BubbleCard) {
             card.reveal = 0f
             card.scaleX = 0.6f
@@ -411,15 +525,115 @@ internal object BubbleNotificationOverlay {
             }
         }
 
-        private fun buildCard(entry: BubbleEntry): BubbleCard {
-            val card = BubbleCard(context, dark)
-            card.orientation = HORIZONTAL
-            card.gravity = Gravity.CENTER_VERTICAL
-            card.setPadding(dp(CONTENT_PADDING_H_DP), dp(CONTENT_PADDING_V_DP), dp(CONTENT_PADDING_H_DP), dp(CONTENT_PADDING_V_DP))
-            card.elevation = dp(ELEVATION_DP).toFloat()
-            card.isClickable = true
-            card.cornerRadiusPx = dp(CORNER_RADIUS_DP).toFloat()
+        private fun dp(value: Int): Int = (value * density).toInt()
 
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    lastRawX = event.rawX
+                    lastRawY = event.rawY
+                    dragging = false
+                    held = false
+                    swiped = false
+                    postDelayed(holdRunnable, HOLD_MS)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - lastRawX
+                    val dy = event.rawY - lastRawY
+                    if (ballMode) {
+                        if (!dragging && (abs(dx) > dp(4) || abs(dy) > dp(4))) dragging = true
+                        if (dragging) {
+                            onDrag?.invoke(dx.toInt(), dy.toInt())
+                            lastRawX = event.rawX
+                            lastRawY = event.rawY
+                        }
+                        return true
+                    }
+                    if (!swiped) {
+                        val totalDy = event.y - downY
+                        val totalDx = event.x - downX
+                        if (abs(totalDy) > dp(SWIPE_THRESHOLD_DP) && abs(totalDx) < width * 0.6f) {
+                            swiped = true
+                            removeCallbacks(holdRunnable)
+                            if (totalDy < 0) onSwipeUp?.invoke() else onSwipeDown?.invoke()
+                        }
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    removeCallbacks(holdRunnable)
+                    if (ballMode) {
+                        if (!dragging) onBallTap?.invoke() else onDragEnd?.invoke()
+                    } else if (!swiped && !held) {
+                        onTap?.invoke()
+                    }
+                    dragging = false
+                    held = false
+                    swiped = false
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    removeCallbacks(holdRunnable)
+                    if (dragging) onDragEnd?.invoke()
+                    dragging = false
+                    held = false
+                    swiped = false
+                    return true
+                }
+            }
+            return false
+        }
+
+        override fun performClick(): Boolean {
+            super.performClick()
+            return true
+        }
+    }
+
+    /**
+     * 气泡卡片：渐变背景 + 边缘扫入裁剪 + 1.05dp 高光描边，照抄原模块 C0。
+     * 右上角用一个小圆点表示"还有更早的通知"。
+     */
+    private class BubbleCard(
+        context: Context,
+        private val dark: Boolean,
+        private val hasPrevious: Boolean,
+        private val count: Int,
+    ) : LinearLayout(context) {
+
+        var reveal = 1f
+            set(value) {
+                field = value
+                invalidate()
+            }
+        private var cornerRadiusPx = 0f
+        private var dockEdge = 1
+
+        private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.05f * resources.displayMetrics.density
+        }
+        private val clipPath = Path()
+        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        init {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val density = resources.displayMetrics.density
+            val hPad = (CONTENT_PADDING_H_DP * density).toInt()
+            val vPad = (CONTENT_PADDING_V_DP * density).toInt()
+            setPadding(hPad, vPad, hPad, vPad)
+            elevation = ELEVATION_DP * density
+            isClickable = true
+            cornerRadiusPx = CORNER_RADIUS_DP * density
+        }
+
+        fun bind(entry: BubbleEntry, dark: Boolean) {
+            removeAllViews()
+            val density = resources.displayMetrics.density
             val background = GradientDrawable().apply {
                 orientation = GradientDrawable.Orientation.TOP_BOTTOM
                 if (dark) {
@@ -427,18 +641,18 @@ internal object BubbleNotificationOverlay {
                 } else {
                     colors = intArrayOf(Color.rgb(255, 255, 255), Color.rgb(235, 247, 252), Color.rgb(196, 222, 240))
                 }
-                cornerRadius = dp(CORNER_RADIUS_DP).toFloat()
+                cornerRadius = CORNER_RADIUS_DP * density
                 if (dark) {
-                    setStroke(dp(1), Color.argb(200, 104, 133, 151))
+                    setStroke((1 * density).toInt(), Color.argb(200, 104, 133, 151))
                 } else {
-                    setStroke(dp(1), Color.argb(210, 205, 225, 235))
+                    setStroke((1 * density).toInt(), Color.argb(210, 205, 225, 235))
                 }
                 val opacity = runCatching {
                     Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_OPACITY_PCT, 100)
                 }.getOrDefault(100).coerceIn(40, 100)
                 alpha = opacity * 255 / 100
             }
-            card.background = background
+            this.background = background
 
             entry.icon?.let { icon ->
                 val imageView = ImageView(context)
@@ -446,17 +660,17 @@ internal object BubbleNotificationOverlay {
                 cloned.alpha = 255
                 imageView.setImageDrawable(cloned)
                 imageView.scaleType = ImageView.ScaleType.CENTER_CROP
-                val params = LayoutParams(dp(ICON_SIZE_DP), dp(ICON_SIZE_DP))
-                params.rightMargin = dp(ICON_MARGIN_DP)
-                card.addView(imageView, params)
+                val params = LayoutParams((ICON_SIZE_DP * density).toInt(), (ICON_SIZE_DP * density).toInt())
+                params.rightMargin = (ICON_MARGIN_DP * density).toInt()
+                addView(imageView, params)
             }
 
-            val textColumn = LinearLayout(context)
-            textColumn.orientation = VERTICAL
-            textColumn.gravity = Gravity.CENTER_VERTICAL
-
+            val column = LinearLayout(context).apply {
+                orientation = VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
             val titleView = TextView(context).apply {
-                text = entry.appLabel
+                text = if (count > 1) "${entry.appLabel} · ${entry.title}" else entry.appLabel
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, TITLE_SP)
                 setTextColor(if (dark) Color.rgb(183, 198, 210) else Color.rgb(80, 88, 96))
                 maxLines = 1
@@ -469,97 +683,15 @@ internal object BubbleNotificationOverlay {
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
             }
-            textColumn.addView(titleView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-            textColumn.addView(bodyView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(BODY_TOP_MARGIN_DP)
-            })
-            card.addView(textColumn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            return card
+            column.addView(titleView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            column.addView(
+                bodyView,
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = (BODY_TOP_MARGIN_DP * density).toInt()
+                },
+            )
+            addView(column, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         }
-
-        private fun dp(value: Int): Int = (value * density).toInt()
-
-        override fun onTouchEvent(event: MotionEvent): Boolean {
-            if (childCount == 0) return false
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = event.x
-                    downY = event.y
-                    lastRawX = event.rawX
-                    lastRawY = event.rawY
-                    dragging = false
-                    activeIndex = indexAt(event.y)
-                    if (activeIndex < 0) return false
-                    postDelayed(dragRunnable, DRAG_HOLD_MS)
-                    return true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (activeIndex < 0) return false
-                    if (dragging) {
-                        val dx = (event.rawX - lastRawX).toInt()
-                        val dy = (event.rawY - lastRawY).toInt()
-                        lastRawX = event.rawX
-                        lastRawY = event.rawY
-                        if (dx != 0 || dy != 0) onMoveWindow?.invoke(dx, dy)
-                        return true
-                    }
-                    val deltaY = event.y - downY
-                    if (deltaY < -dp(SWIPE_DISMISS_DP) && kotlin.math.abs(event.x - downX) < width * 0.6f) {
-                        removeCallbacks(dragRunnable)
-                        onDismissAt?.invoke(activeIndex)
-                        activeIndex = -1
-                    }
-                    return true
-                }
-                MotionEvent.ACTION_UP -> {
-                    removeCallbacks(dragRunnable)
-                    if (activeIndex >= 0) {
-                        if (dragging) onReleaseWindow?.invoke() else onActivateAt?.invoke(activeIndex)
-                    }
-                    dragging = false
-                    activeIndex = -1
-                    return true
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    removeCallbacks(dragRunnable)
-                    if (dragging) onReleaseWindow?.invoke()
-                    dragging = false
-                    activeIndex = -1
-                    return true
-                }
-            }
-            return false
-        }
-
-        private fun indexAt(y: Float): Int {
-            for (index in 0 until childCount) {
-                val child = getChildAt(index)
-                if (y >= child.top && y <= child.bottom) return index
-            }
-            return -1
-        }
-    }
-
-    /**
-     * 气泡卡片：渐变背景 + 边缘扫入裁剪 + 1.05dp 高光描边。
-     * 裁剪与描边逻辑照抄原模块 C0.dispatchDraw（三角形 clipPath + 圆角内缩描边）。
-     */
-    private class BubbleCard(context: Context, private val dark: Boolean) : LinearLayout(context) {
-
-        var reveal = 1f
-            set(value) {
-                field = value
-                invalidate()
-            }
-        var cornerRadiusPx = 0f
-        /** 吸附边：0 左、1 右、2 上、3 下，决定扫入方向。 */
-        var dockEdge = 1
-
-        private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.05f * resources.displayMetrics.density
-        }
-        private val clipPath = Path()
 
         override fun dispatchDraw(canvas: Canvas) {
             val save = canvas.save()
@@ -601,12 +733,11 @@ internal object BubbleNotificationOverlay {
                 val radius = (cornerRadiusPx - inset).coerceAtLeast(1f)
                 canvas.drawRoundRect(inset, inset, width - inset, height - inset, radius, radius, highlight)
             }
+            if (hasPrevious) {
+                dotPaint.color = if (dark) Color.argb(160, 205, 231, 242) else Color.argb(160, 120, 160, 190)
+                canvas.drawCircle(width - 7 * density, 6 * density, 2.4f * density, dotPaint)
+            }
             canvas.restoreToCount(save)
         }
-    }
-
-    /** 记录最近一次宿主 Context（保持与旧调用点兼容）。 */
-    fun prime(context: Context) {
-        lastContext = context.applicationContext
     }
 }

@@ -22,11 +22,20 @@ class AgentNotificationHistoryService : NotificationListenerService() {
         super.onListenerConnected()
         connectedService = this
         activeNotifications?.forEach(::record)
+        runCatching {
+            java.io.File(filesDir, "bubble_debug.log")
+                .appendText("${System.currentTimeMillis()} listener connected\n")
+        }
     }
 
     override fun onListenerDisconnected() {
         if (connectedService === this) connectedService = null
         super.onListenerDisconnected()
+        // ColorOS 会在后台回收监听服务，导致气泡收不到通知：主动请求系统重连。
+        // requestRebind 有每秒一次的频率限制，失败就静默等系统自己拉起。
+        runCatching {
+            requestRebind(ComponentName(this, AgentNotificationHistoryService::class.java))
+        }
     }
 
     override fun onDestroy() {

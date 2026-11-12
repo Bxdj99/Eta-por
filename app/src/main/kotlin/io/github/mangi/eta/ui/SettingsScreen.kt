@@ -487,68 +487,14 @@ private fun SettingsPageContent(
                         iconTint = SettingsIconColors.Blue,
                     )
                     CouiIconDivider()
-                    SwitchPref(
-                        context = context,
-                        prefs = agentPrefs,
+                    CouiPreference(
                         title = "通知气泡",
-                        summary = "通知到达时在屏幕上弹气泡，点击打开应用、上滑消除",
-                        key = Prefs.Keys.AGENT_BUBBLE_NOTIFICATIONS,
-                        icon = Icons.Rounded.NotificationsActive,
-                        iconTint = SettingsIconColors.Green,
-                    )
-                    var bubbleWidthDraft by remember {
-                        mutableStateOf(
-                            Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_WIDTH_DP, 360).toFloat(),
-                        )
-                    }
-                    var bubbleTimeoutDraft by remember {
-                        mutableStateOf(
-                            Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_TIMEOUT_SEC, 8).toFloat(),
-                        )
-                    }
-                    var bubbleOpacityDraft by remember {
-                        mutableStateOf(
-                            Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_OPACITY_PCT, 100).toFloat(),
-                        )
-                    }
-                    CouiIconDivider()
-                    CouiSliderPreference(
-                        title = "气泡宽度",
-                        summary = "最宽不超过屏宽减 20dp",
-                        value = bubbleWidthDraft,
-                        onValueChange = { bubbleWidthDraft = it },
-                        valueRange = 240f..360f,
-                        steps = 5,
-                        valueText = "${bubbleWidthDraft.roundToInt()}dp",
-                        onValueChangeFinished = {
-                            Prefs.setAgentInt(Prefs.Keys.AGENT_BUBBLE_WIDTH_DP, bubbleWidthDraft.roundToInt())
+                        summary = "气泡宽度、停留时长、不透明度、手势",
+                        value = if (Prefs.isEnabled(Prefs.Keys.AGENT_BUBBLE_NOTIFICATIONS)) "已开启" else "已关闭",
+                        icon = {
+                            CouiSettingsIcon(Icons.Rounded.NotificationsActive, SettingsIconColors.Green)
                         },
-                    )
-                    CouiIconDivider()
-                    CouiSliderPreference(
-                        title = "停留时长",
-                        summary = "无操作后自动淡出",
-                        value = bubbleTimeoutDraft,
-                        onValueChange = { bubbleTimeoutDraft = it },
-                        valueRange = 3f..20f,
-                        steps = 8,
-                        valueText = "${bubbleTimeoutDraft.roundToInt()} 秒",
-                        onValueChangeFinished = {
-                            Prefs.setAgentInt(Prefs.Keys.AGENT_BUBBLE_TIMEOUT_SEC, bubbleTimeoutDraft.roundToInt())
-                        },
-                    )
-                    CouiIconDivider()
-                    CouiSliderPreference(
-                        title = "背景不透明度",
-                        summary = "越低越透，能看清后面的内容",
-                        value = bubbleOpacityDraft,
-                        onValueChange = { bubbleOpacityDraft = it },
-                        valueRange = 40f..100f,
-                        steps = 5,
-                        valueText = "${bubbleOpacityDraft.roundToInt()}%",
-                        onValueChangeFinished = {
-                            Prefs.setAgentInt(Prefs.Keys.AGENT_BUBBLE_OPACITY_PCT, bubbleOpacityDraft.roundToInt())
-                        },
+                        onClick = { onNavigate(AppRoute.BubbleSettings) },
                     )
                     CouiIconDivider()
                     SwitchPref(

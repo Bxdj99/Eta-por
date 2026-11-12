@@ -499,6 +499,9 @@ fun AgentAppRoot(
             entry<AppRoute.WebToolsSettings>(swipeDismiss = swipeDismiss) {
                 WebToolsSettingsScreen(onBack = ::popRoute)
             }
+            entry<AppRoute.BubbleSettings>(swipeDismiss = swipeDismiss) {
+                io.github.mangi.eta.ui.screens.tools.BubbleSettingsScreen(onBack = ::popRoute)
+            }
             entry<AppRoute.Subagents>(swipeDismiss = swipeDismiss) {
                 SubagentSettingsScreen(onBack = ::popRoute)
             }
