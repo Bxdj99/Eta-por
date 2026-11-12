@@ -237,7 +237,13 @@ internal object BubbleHook {
         cardParams = null
     }
 
-    /** 卡片贴在球的内侧：球靠右就右对齐，否则左对齐；优先放在球下方，放不下就放上方。 */
+    /**
+     * 卡片定位，逐行照抄 C0.n()：
+     *
+     * 可用区 = 屏宽/高 去掉系统栏 inset 再各留 10dp；卡片默认贴在球旁边
+     * （球在左半屏 → 卡片在球右侧，右半屏 → 卡片在球左侧，垂直居中对齐球心）；
+     * 若与球相交，则依次尝试“上 / 下 / 右 / 左”四个候选位，取第一个不相交的。
+     */
     private fun positionCard(
         manager: WindowManager,
         layoutParams: WindowManager.LayoutParams,
@@ -246,22 +252,60 @@ internal object BubbleHook {
         val ballParams = params ?: return
         val metrics = manager.currentWindowMetrics
         val density = view.resources.displayMetrics.density
-        val gap = (8 * density).toInt()
+        val margin = (10 * density).toInt()
+        val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+            android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
+        )
         val screenWidth = metrics.bounds.width()
         val screenHeight = metrics.bounds.height()
-        val ballCenterX = ballParams.x + ballParams.width / 2f
-        val onRight = ballCenterX > screenWidth / 2f
-        layoutParams.x = if (onRight) {
-            screenWidth - layoutParams.width - gap
+        val cardWidth = layoutParams.width
+        val cardHeight = layoutParams.height
+
+        val left = insets.left + margin
+        val right = (screenWidth - insets.right - cardWidth - margin).coerceAtLeast(left)
+        val top = insets.top + margin
+        val bottom = (screenHeight - insets.bottom - cardHeight - margin).coerceAtLeast(top)
+
+        val ballRect = Rect(
+            ballParams.x,
+            ballParams.y,
+            ballParams.x + ballParams.width,
+            ballParams.y + ballParams.height,
+        )
+        val ballCenterX = ballRect.centerX()
+        val ballCenterY = ballRect.centerY()
+
+        var x = if (ballCenterX < screenWidth / 2) {
+            ballRect.right + margin
         } else {
-            gap
+            ballRect.left - cardWidth - margin
         }
-        val below = ballParams.y + ballParams.height + gap
-        layoutParams.y = if (below + layoutParams.height <= screenHeight - gap) {
-            below
-        } else {
-            (ballParams.y - layoutParams.height - gap).coerceAtLeast(gap)
+        var y = ballCenterY - cardHeight / 2
+        x = x.coerceIn(left, right)
+        y = y.coerceIn(top, bottom)
+
+        val occupied = Rect(x, y, x + cardWidth, y + cardHeight)
+        if (Rect.intersects(occupied, ballRect)) {
+            val centerY = (ballCenterY - cardHeight / 2).coerceIn(top, bottom)
+            val candidates = listOf(
+                (ballCenterX - cardWidth / 2).coerceIn(left, right) to (ballRect.top - cardHeight - margin),
+                (ballCenterX - cardWidth / 2).coerceIn(left, right) to (ballRect.bottom + margin),
+                (ballRect.right + margin).coerceIn(left, right) to centerY,
+                (ballRect.left - cardWidth - margin).coerceIn(left, right) to centerY,
+            )
+            for ((cx, cy) in candidates) {
+                val candidateY = cy.coerceIn(top, bottom)
+                val rect = Rect(cx, candidateY, cx + cardWidth, candidateY + cardHeight)
+                if (!Rect.intersects(rect, ballRect)) {
+                    layoutParams.x = cx
+                    layoutParams.y = candidateY
+                    runCatching { manager.updateViewLayout(view, layoutParams) }
+                    return
+                }
+            }
         }
+        layoutParams.x = x
+        layoutParams.y = y
         runCatching { manager.updateViewLayout(view, layoutParams) }
     }
 
@@ -360,6 +404,12 @@ internal object BubbleHook {
                     current.x = (startX + dx.toInt()).coerceIn(-half, metrics.bounds.width() - half)
                     current.y = (startY + dy.toInt()).coerceIn(0, metrics.bounds.height() - current.height)
                     runCatching { manager.updateViewLayout(view, current) }
+                    // 卡片跟着球一起挪（对齐原模块的 onLayoutChangedAction）
+                    val followCard = card
+                    val followParams = cardParams
+                    if (followCard != null && followParams != null && followCard.visibility == android.view.View.VISIBLE) {
+                        positionCard(manager, followParams, followCard)
+                    }
                 }
                 return true
             }
@@ -405,7 +455,13 @@ internal object BubbleHook {
         return false
     }
 
-    /** 松手结算：底部删除、靠边吸附、其余回弹。 */
+    /**
+     * 松手结算，逐行照抄 r0.l()：
+     * 1) y 先夹到 [8dp+topInset, 屏高-bottomInset-高度-12dp]
+     * 2) 掉进底部 52dp 区 → 缩小淡出删除（260ms / DecelerateInterpolator(1.6) / scale 0.38 / 下移 76dp）
+     * 3) 球心离左右边缘 ≤52dp → 吸附（b()：260ms DecelerateInterpolator(1.7)，alpha 0.5）
+     * 4) 其余回弹到边界内，220ms alpha/scale 归位
+     */
     private fun settle(
         current: WindowManager.LayoutParams,
         view: BubbleBallLayer,
@@ -413,26 +469,66 @@ internal object BubbleHook {
         density: Float,
     ) {
         val metrics = manager.currentWindowMetrics
+        val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+            android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
+        )
+        val screenWidth = metrics.bounds.width()
+        val screenHeight = metrics.bounds.height()
+        val margin = 8 * density
+        val top = (insets.top + margin).toInt()
+        val bottomLimit = (screenHeight - insets.bottom - current.height - (12 * density))
+            .toInt()
+            .coerceAtLeast(top)
+        current.y = current.y.coerceIn(top, bottomLimit)
         val edge = EDGE_DP * density
-        val bottom = metrics.bounds.height()
-        if (current.y >= bottom - edge) {
-            view.animate().alpha(0f).scaleX(0.38f).scaleY(0.38f)
-                .translationY(76f * density).setDuration(240L)
+        if (current.y >= bottomLimit - edge) {
+            view.animate()
+                .alpha(0f)
+                .scaleX(0.38f)
+                .scaleY(0.38f)
+                .translationY(76f * density)
+                .setDuration(260L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.6f))
                 .withEndAction { removeBall() }
                 .start()
             return
         }
         val center = current.x + current.width / 2f
-        when {
-            center <= edge -> dock(current, view, manager, -1, metrics.bounds.width())
-            center >= metrics.bounds.width() - edge -> dock(current, view, manager, 1, metrics.bounds.width())
-            else -> {
-                current.x = current.x.coerceIn(0, metrics.bounds.width() - current.width)
-                current.y = current.y.coerceIn(0, bottom - current.height)
-                runCatching { manager.updateViewLayout(view, current) }
-                view.alpha = 1f
+        val docked = when {
+            center <= edge -> {
+                dock(current, view, manager, -1, screenWidth)
+                true
             }
+            center >= screenWidth - edge -> {
+                dock(current, view, manager, 1, screenWidth)
+                true
+            }
+            else -> false
         }
+        if (!docked) {
+            current.x = current.x.coerceIn(
+                (insets.left + margin).toInt(),
+                (screenWidth - insets.right - current.width - margin).coerceAtLeast(0f).toInt(),
+            )
+            runCatching { manager.updateViewLayout(view, current) }
+        }
+        view.animate()
+            .cancel()
+        view.animate()
+            .alpha(if (docked) 0.5f else 1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(220L)
+            .setInterpolator(android.view.animation.DecelerateInterpolator())
+            .start()
+        // 吸附动画结束后让卡片跟随到球的最终位置
+        handler.postDelayed({
+            val followCard = card
+            val followParams = cardParams
+            if (followCard != null && followParams != null && followCard.visibility == android.view.View.VISIBLE) {
+                positionCard(manager, followParams, followCard)
+            }
+        }, 300L)
     }
 
     private fun dock(
