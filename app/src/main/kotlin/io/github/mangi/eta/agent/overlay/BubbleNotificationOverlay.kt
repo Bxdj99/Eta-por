@@ -4,51 +4,69 @@ import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.graphics.Canvas
-import android.graphics.Paint
+import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.RectF
+import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.service.notification.StatusBarNotification
-import android.text.TextPaint
 import android.text.TextUtils
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
 import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
 import io.github.mangi.eta.config.Prefs
 import org.json.JSONArray
-import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.min
 
 /**
  * 通知气泡（Bubble Notifications 的原生重实现）。
  *
- * 与原 LSPosed 模块的差别：模块 hook 进 SystemUI 改通知面板本身；这里走
- * [android.service.notification.NotificationListenerService] + 悬浮窗，
- * 只画气泡、不动系统 UI，因此不需要额外常驻进程（Eta 本来就在跑）。
+ * 视觉参数照抄原 LSPosed 模块（io.github.freeform.bubble 1.9.9 的 C0 类）：
+ * 18dp 圆角、三色纵向渐变背景、1dp 描边、8dp elevation、10dp/7dp 内边距、
+ * 34dp 图标 + 10dp 右距、10sp 标题（次级色）、13sp 正文（主色）、正文 2dp 上间距、
+ * 宽度 = min(360dp, 屏宽 - 20dp) 且不小于 180dp，高度下限 58dp。
  *
- * 触摸纪律：窗口尺寸紧贴气泡内容，透明区不铺满屏幕，避免吞掉下层触摸。
+ * 与原模块的差别仅在承载方式：模块 hook 进 SystemUI 改通知面板；这里走
+ * NotificationListenerService + 悬浮窗，只画气泡、不动系统 UI，不新增常驻进程。
  */
 internal object BubbleNotificationOverlay {
 
     private const val TAG = "EtaBubble"
     private const val MAX_BUBBLES = 3
     private const val AUTO_DISMISS_MS = 8_000L
-    private const val WINDOW_WIDTH_DP = 316
-    private const val BUBBLE_HEIGHT_DP = 66
     private const val BUBBLE_GAP_DP = 8
-    private const val SWIPE_DISMISS_DP = 28
+    private const val SWIPE_DISMISS_DP = 24
     private const val DRAG_HOLD_MS = 400L
+
+    // 照抄原模块 C0 的尺寸（dp/sp）
+    private const val MAX_WIDTH_DP = 360
+    private const val MIN_WIDTH_DP = 180
+    private const val SIDE_MARGIN_DP = 20
+    private const val MIN_HEIGHT_DP = 58
+    private const val CORNER_RADIUS_DP = 18
+    private const val CONTENT_PADDING_H_DP = 10
+    private const val CONTENT_PADDING_V_DP = 7
+    private const val ICON_SIZE_DP = 34
+    private const val ICON_MARGIN_DP = 10
+    private const val TITLE_SP = 10f
+    private const val BODY_SP = 13f
+    private const val BODY_TOP_MARGIN_DP = 2
+    private const val ELEVATION_DP = 8
 
     private val handler = Handler(Looper.getMainLooper())
     private val iconCache = HashMap<String, Drawable?>()
 
     private var windowManager: WindowManager? = null
     private var params: WindowManager.LayoutParams? = null
-    private var view: BubbleStackView? = null
+    private var container: BubbleContainer? = null
     private val bubbles = ArrayList<BubbleEntry>()
     private val dismissRunnable = Runnable { dismissAll(animate = true) }
 
@@ -56,26 +74,16 @@ internal object BubbleNotificationOverlay {
     fun onPosted(context: Context, sbn: StatusBarNotification) {
         runCatching {
             prime(context)
-            debug(context, "onPosted pkg=${sbn.packageName} enabled=${enabled()} show=${shouldShow(sbn)}")
             if (!enabled()) return
             if (!shouldShow(sbn)) return
             val entry = buildEntry(context.applicationContext, sbn) ?: return
-            debug(context, "queue ${entry.packageName} / ${entry.title}")
             handler.post { show(context.applicationContext, entry) }
         }.onFailure { debug(context, "onPosted failed: $it") }
     }
 
-    private fun debug(context: Context, message: String) {
-        runCatching {
-            val file = java.io.File(context.filesDir, "bubble_debug.log")
-            if (file.length() > 64 * 1024) file.delete()
-            file.appendText("${System.currentTimeMillis()} $message\n")
-        }
-    }
-
     fun dismissAll(animate: Boolean = false) {
         handler.removeCallbacks(dismissRunnable)
-        val target = view ?: run {
+        val target = container ?: run {
             bubbles.clear()
             return
         }
@@ -95,9 +103,7 @@ internal object BubbleNotificationOverlay {
             ?: "[]"
         val array = JSONArray(raw)
         buildSet {
-            for (index in 0 until array.length()) {
-                add(array.optString(index))
-            }
+            for (index in 0 until array.length()) add(array.optString(index))
         }
     }.getOrDefault(emptySet())
 
@@ -143,19 +149,22 @@ internal object BubbleNotificationOverlay {
         }
 
     private fun show(context: Context, entry: BubbleEntry) {
-        if (view == null && !attach(context)) {
+        if (container == null && !attach(context)) {
             debug(context, "attach failed for ${entry.packageName}")
             return
         }
-        val stack = view ?: return
+        val stack = container ?: return
         bubbles.removeAll { it.key == entry.key }
         while (bubbles.size >= MAX_BUBBLES) bubbles.removeAt(0)
         bubbles.add(entry)
         stack.alpha = 1f
-        stack.invalidate()
-        updateWindowSize()
+        stack.render(bubbles)
+        resizeWindow()
+        // 展开动画与原模块一致：从中间的小尺寸淡入放大
+        stack.scaleX = 0.92f
+        stack.scaleY = 0.92f
+        stack.animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
         scheduleDismiss()
-        debug(context, "shown ${entry.packageName} count=${bubbles.size}")
     }
 
     private fun scheduleDismiss() {
@@ -169,12 +178,9 @@ internal object BubbleNotificationOverlay {
     private fun attach(fallback: Context): Boolean {
         val context = hostContext(fallback)
         val manager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return false
-        val density = context.resources.displayMetrics.density
-        val width = (WINDOW_WIDTH_DP * density).toInt()
-        val height = windowHeightPx(context)
         val layoutParams = WindowManager.LayoutParams(
-            width,
-            height,
+            bubbleWidthPx(context),
+            WindowManager.LayoutParams.WRAP_CONTENT,
             overlayWindowType(),
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -188,7 +194,7 @@ internal object BubbleNotificationOverlay {
             y = saved.second
             windowAnimations = 0
         }
-        val stack = BubbleStackView(context, density).apply {
+        val stack = BubbleContainer(context).apply {
             onDismissAt = { index -> dismissAt(index) }
             onActivateAt = { index -> activateAt(index) }
             onMoveWindow = { dx, dy ->
@@ -205,16 +211,15 @@ internal object BubbleNotificationOverlay {
             manager.addView(stack, layoutParams)
             windowManager = manager
             params = layoutParams
-            view = stack
-            updateWindowSize()
+            container = stack
             true
-        }.onFailure { android.util.Log.w(TAG, "addView failed", it) }.getOrDefault(false)
+        }.onFailure { debug(context, "addView failed: $it") }.getOrDefault(false)
     }
 
     private fun detach() {
-        val stack = view ?: return
+        val stack = container ?: return
         runCatching { windowManager?.removeView(stack) }
-        view = null
+        container = null
         params = null
         windowManager = null
         bubbles.clear()
@@ -224,13 +229,13 @@ internal object BubbleNotificationOverlay {
     private fun dismissAt(index: Int) {
         if (index !in bubbles.indices) return
         bubbles.removeAt(index)
-        val stack = view ?: return
+        val stack = container ?: return
         if (bubbles.isEmpty()) {
             detach()
             return
         }
-        stack.invalidate()
-        updateWindowSize()
+        stack.render(bubbles)
+        resizeWindow()
         scheduleDismiss()
     }
 
@@ -238,8 +243,11 @@ internal object BubbleNotificationOverlay {
         val entry = bubbles.getOrNull(index) ?: return
         val context = hostContext(lastContext ?: return)
         dismissAt(index)
-        val sent = runCatching { entry.contentIntent?.send() }.isSuccess && entry.contentIntent != null
-        if (sent) return
+        val pending = entry.contentIntent
+        if (pending != null) {
+            val sent = runCatching { pending.send() }.isSuccess
+            if (sent) return
+        }
         runCatching {
             val intent: Intent? = context.packageManager.getLaunchIntentForPackage(entry.packageName)
             if (intent != null) {
@@ -249,47 +257,54 @@ internal object BubbleNotificationOverlay {
         }
     }
 
-    private fun updateWindowSize() {
-        val stack = view ?: return
+    private fun resizeWindow() {
+        val stack = container ?: return
         val current = params ?: return
         val manager = windowManager ?: return
-        val height = windowHeightPx(stack.context)
-        if (current.height == height) return
-        current.height = height
+        val width = bubbleWidthPx(stack.context)
+        if (current.width == width) return
+        current.width = width
         runCatching { manager.updateViewLayout(stack, current) }
     }
 
-    private fun windowHeightPx(context: Context): Int {
+    /** 原模块公式：宽度 = min(360dp, 屏宽 - inset - 20dp)，且不小于 180dp。 */
+    private fun bubbleWidthPx(context: Context): Int {
         val density = context.resources.displayMetrics.density
-        val count = bubbles.size.coerceAtLeast(1)
-        val dpHeight = (BUBBLE_HEIGHT_DP * count) + (BUBBLE_GAP_DP * (count - 1)) + 8
-        return (dpHeight * density).toInt()
+        val manager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        val metrics = runCatching { manager?.currentWindowMetrics }.getOrNull()
+        val screenWidth = metrics?.bounds?.width() ?: 1080
+        val insets = metrics?.windowInsets?.getInsetsIgnoringVisibility(
+            android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout()
+        )
+        val horizontalInset = (insets?.left ?: 0) + (insets?.right ?: 0)
+        val maxWidth = ((MAX_WIDTH_DP * density).toInt())
+        val available = (screenWidth - horizontalInset - (SIDE_MARGIN_DP * density).toInt())
+        val minWidth = (MIN_WIDTH_DP * density).toInt()
+        return min(maxWidth, available).coerceAtLeast(minWidth)
     }
 
     private fun snapToEdge() {
         val current = params ?: return
-        val stack = view ?: return
+        val stack = container ?: return
         val manager = windowManager ?: return
         val metrics = runCatching { manager.currentWindowMetrics }.getOrNull() ?: return
         val screenWidth = metrics.bounds.width()
         val screenHeight = metrics.bounds.height()
         val margin = (8 * stack.resources.displayMetrics.density).toInt()
         current.x = if (current.x + current.width / 2 < screenWidth / 2) margin else screenWidth - current.width - margin
-        current.y = current.y.coerceIn(margin, (screenHeight - current.height - margin).coerceAtLeast(margin))
+        current.y = current.y.coerceIn(margin, (screenHeight - stack.height - margin).coerceAtLeast(margin))
         runCatching { manager.updateViewLayout(stack, current) }
-        lastContext?.let { context ->
-            Prefs.localAgentPreferences()?.edit()
-                ?.putString(Prefs.Keys.AGENT_BUBBLE_POSITION, "${current.x},${current.y}")
-                ?.apply()
-        }
+        Prefs.localAgentPreferences()?.edit()
+            ?.putString(Prefs.Keys.AGENT_BUBBLE_POSITION, "${current.x},${current.y}")
+            ?.apply()
     }
 
     private fun savedPosition(context: Context, width: Int): Pair<Int, Int> {
         val density = context.resources.displayMetrics.density
         val manager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         val metrics = runCatching { manager?.currentWindowMetrics }.getOrNull()
-        val screenWidth = metrics?.bounds?.width() ?: (1080)
-        val screenHeight = metrics?.bounds?.height() ?: (2400)
+        val screenWidth = metrics?.bounds?.width() ?: 1080
+        val screenHeight = metrics?.bounds?.height() ?: 2400
         val margin = (8 * density).toInt()
         val defaultY = (120 * density).toInt()
         val raw = Prefs.localAgentPreferences()?.getString(Prefs.Keys.AGENT_BUBBLE_POSITION, null)
@@ -310,13 +325,16 @@ internal object BubbleNotificationOverlay {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         }
 
+    private fun debug(context: Context, message: String) {
+        runCatching {
+            val file = java.io.File(context.filesDir, "bubble_debug.log")
+            if (file.length() > 64 * 1024) file.delete()
+            file.appendText("${System.currentTimeMillis()} $message\n")
+        }
+    }
+
     @Volatile
     private var lastContext: Context? = null
-
-    /** 记录最近一次宿主 Context（attach 时需要拿到 application context 或无障碍 context）。 */
-    fun prime(context: Context) {
-        lastContext = context.applicationContext
-    }
 
     internal data class BubbleEntry(
         val key: String,
@@ -329,100 +347,117 @@ internal object BubbleNotificationOverlay {
         val postedAt: Long,
     )
 
-    /** 自绘气泡栈：一个窗口承载最多 3 个气泡，避免多窗口各自抢触摸。 */
+    /**
+     * 气泡容器：垂直排列最多 [MAX_BUBBLES] 张卡片。
+     * 卡片本身照抄原模块的横向 LinearLayout 结构（图标 + 标题/正文两行）。
+     */
     @SuppressLint("ViewConstructor")
-    private class BubbleStackView(
-        context: Context,
-        private val density: Float,
-    ) : View(context) {
+    private class BubbleContainer(context: Context) : LinearLayout(context) {
 
         var onDismissAt: ((Int) -> Unit)? = null
         var onActivateAt: ((Int) -> Unit)? = null
         var onMoveWindow: ((Int, Int) -> Unit)? = null
         var onReleaseWindow: (() -> Unit)? = null
 
-        private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF2202124.toInt() }
-        private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1f * density
-            color = 0x26FFFFFF
-        }
-        private val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0x99FFFFFF.toInt()
-            textSize = 11f * density
-        }
-        private val bodyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFF5F6F8.toInt()
-            textSize = 13.5f * density
-        }
-        private val rect = RectF()
-        private val iconRect = RectF()
-
-        private val bubbleHeight = BUBBLE_HEIGHT_DP * density
-        private val gap = BUBBLE_GAP_DP * density
-        private val radius = 20f * density
-        private val padding = 14f * density
-        private val iconSize = 34f * density
+        private val density = resources.displayMetrics.density
+        private val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
 
         private var downX = 0f
         private var downY = 0f
         private var activeIndex = -1
         private var dragging = false
-        private var lastX = 0f
-        private var lastY = 0f
+        private var lastRawX = 0f
+        private var lastRawY = 0f
         private val dragRunnable = Runnable {
             if (activeIndex >= 0) dragging = true
         }
 
-        override fun onDraw(canvas: Canvas) {
-            val entries = bubbles
-            if (entries.isEmpty()) return
+        init {
+            orientation = VERTICAL
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        }
+
+        fun render(entries: List<BubbleEntry>) {
+            removeAllViews()
             entries.forEachIndexed { index, entry ->
-                drawBubble(canvas, index, entry)
+                addView(buildCard(entry), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                    if (index > 0) topMargin = dp(BUBBLE_GAP_DP)
+                })
             }
         }
 
-        private fun drawBubble(canvas: Canvas, index: Int, entry: BubbleEntry) {
-            val top = index * (bubbleHeight + gap)
-            val bottom = top + bubbleHeight
-            rect.set(0f, top, width.toFloat(), bottom)
-            canvas.drawRoundRect(rect, radius, radius, background)
-            canvas.drawRoundRect(rect, radius, radius, border)
+        private fun buildCard(entry: BubbleEntry): LinearLayout {
+            val card = LinearLayout(context)
+            card.orientation = HORIZONTAL
+            card.gravity = Gravity.CENTER_VERTICAL
+            card.setPadding(dp(CONTENT_PADDING_H_DP), dp(CONTENT_PADDING_V_DP), dp(CONTENT_PADDING_H_DP), dp(CONTENT_PADDING_V_DP))
+            card.elevation = dp(ELEVATION_DP).toFloat()
+            card.isClickable = true
 
-            val iconLeft = padding
-            val iconTop = top + (bubbleHeight - iconSize) / 2f
-            iconRect.set(iconLeft, iconTop, iconLeft + iconSize, iconTop + iconSize)
-            val icon = entry.icon
-            if (icon != null) {
-                icon.setBounds(
-                    iconRect.left.toInt(),
-                    iconRect.top.toInt(),
-                    iconRect.right.toInt(),
-                    iconRect.bottom.toInt(),
-                )
-                icon.draw(canvas)
+            val background = GradientDrawable().apply {
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                if (dark) {
+                    colors = intArrayOf(Color.rgb(57, 72, 84), Color.rgb(38, 52, 64), Color.rgb(27, 39, 49))
+                } else {
+                    colors = intArrayOf(Color.rgb(255, 255, 255), Color.rgb(235, 247, 252), Color.rgb(196, 222, 240))
+                }
+                cornerRadius = dp(CORNER_RADIUS_DP).toFloat()
+                if (dark) {
+                    setStroke(dp(1), Color.argb(200, 104, 133, 151))
+                } else {
+                    setStroke(dp(1), Color.argb(210, 205, 225, 235))
+                }
+            }
+            card.background = background
+
+            entry.icon?.let { icon ->
+                val imageView = ImageView(context)
+                val cloned = runCatching { icon.constantState?.newDrawable()?.mutate() ?: icon }.getOrDefault(icon)
+                cloned.alpha = 255
+                imageView.setImageDrawable(cloned)
+                imageView.scaleType = ImageView.ScaleType.CENTER_CROP
+                val params = LayoutParams(dp(ICON_SIZE_DP), dp(ICON_SIZE_DP))
+                params.rightMargin = dp(ICON_MARGIN_DP)
+                card.addView(imageView, params)
             }
 
-            val textLeft = iconRect.right + 12f * density
-            val textRight = width - padding - 8f * density
-            val textWidth = (textRight - textLeft).coerceAtLeast(10f)
-            val titleBaseline = top + 22f * density
-            val bodyBaseline = top + 42f * density
-            val titleText = TextUtils.ellipsize(entry.appLabel, titlePaint, textWidth, TextUtils.TruncateAt.END)
-            val bodyText = TextUtils.ellipsize(entry.text.ifBlank { entry.title }, bodyPaint, textWidth, TextUtils.TruncateAt.END)
-            canvas.drawText(titleText, 0, titleText.length, textLeft, titleBaseline, titlePaint)
-            canvas.drawText(bodyText, 0, bodyText.length, textLeft, bodyBaseline, bodyPaint)
+            val textColumn = LinearLayout(context)
+            textColumn.orientation = VERTICAL
+            textColumn.gravity = Gravity.CENTER_VERTICAL
+
+            val titleView = TextView(context).apply {
+                text = entry.appLabel
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, TITLE_SP)
+                setTextColor(if (dark) Color.rgb(183, 198, 210) else Color.rgb(80, 88, 96))
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+            val bodyView = TextView(context).apply {
+                text = entry.text.ifBlank { entry.title }
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, BODY_SP)
+                setTextColor(if (dark) Color.rgb(241, 245, 248) else Color.rgb(24, 28, 32))
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+            }
+            textColumn.addView(titleView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            textColumn.addView(bodyView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(BODY_TOP_MARGIN_DP)
+            })
+            card.addView(textColumn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            return card
         }
+
+        private fun dp(value: Int): Int = (value * density).toInt()
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            val entries = bubbles
-            if (entries.isEmpty()) return false
+            if (childCount == 0) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = event.x
                     downY = event.y
-                    lastX = event.rawX
-                    lastY = event.rawY
+                    lastRawX = event.rawX
+                    lastRawY = event.rawY
                     dragging = false
                     activeIndex = indexAt(event.y)
                     if (activeIndex < 0) return false
@@ -432,15 +467,15 @@ internal object BubbleNotificationOverlay {
                 MotionEvent.ACTION_MOVE -> {
                     if (activeIndex < 0) return false
                     if (dragging) {
-                        val dx = (event.rawX - lastX).toInt()
-                        val dy = (event.rawY - lastY).toInt()
-                        lastX = event.rawX
-                        lastY = event.rawY
+                        val dx = (event.rawX - lastRawX).toInt()
+                        val dy = (event.rawY - lastRawY).toInt()
+                        lastRawX = event.rawX
+                        lastRawY = event.rawY
                         if (dx != 0 || dy != 0) onMoveWindow?.invoke(dx, dy)
                         return true
                     }
                     val deltaY = event.y - downY
-                    if (deltaY < -SWIPE_DISMISS_DP * density && kotlin.math.abs(event.x - downX) < width * 0.6f) {
+                    if (deltaY < -dp(SWIPE_DISMISS_DP) && kotlin.math.abs(event.x - downX) < width * 0.6f) {
                         removeCallbacks(dragRunnable)
                         onDismissAt?.invoke(activeIndex)
                         activeIndex = -1
@@ -450,11 +485,7 @@ internal object BubbleNotificationOverlay {
                 MotionEvent.ACTION_UP -> {
                     removeCallbacks(dragRunnable)
                     if (activeIndex >= 0) {
-                        if (dragging) {
-                            onReleaseWindow?.invoke()
-                        } else {
-                            onActivateAt?.invoke(activeIndex)
-                        }
+                        if (dragging) onReleaseWindow?.invoke() else onActivateAt?.invoke(activeIndex)
                     }
                     dragging = false
                     activeIndex = -1
@@ -472,9 +503,16 @@ internal object BubbleNotificationOverlay {
         }
 
         private fun indexAt(y: Float): Int {
-            if (bubbles.isEmpty()) return -1
-            val slot = (y / (bubbleHeight + gap)).toInt()
-            return if (slot in bubbles.indices) slot else -1
+            for (index in 0 until childCount) {
+                val child = getChildAt(index)
+                if (y >= child.top && y <= child.bottom) return index
+            }
+            return -1
         }
+    }
+
+    /** 记录最近一次宿主 Context（保持与旧调用点兼容）。 */
+    fun prime(context: Context) {
+        lastContext = context.applicationContext
     }
 }
