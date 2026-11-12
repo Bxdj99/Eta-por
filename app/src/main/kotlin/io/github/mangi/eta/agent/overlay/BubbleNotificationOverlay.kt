@@ -15,6 +15,7 @@ import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.service.notification.StatusBarNotification
+import android.text.TextPaint
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -47,7 +48,9 @@ internal object BubbleNotificationOverlay {
     private const val BUBBLE_GAP_DP = 8
     private const val SWIPE_THRESHOLD_DP = 24
     private const val HOLD_MS = 400L
-    private const val BALL_SIZE_DP = 56
+    /** 球体直径 58dp（原模块半径 29dp）；窗口留出角标与阴影的空间。 */
+    private const val BALL_SIZE_DP = 58
+    private const val BALL_VIEW_SIZE_DP = 76
 
     // 照抄原模块 C0 的尺寸（dp/sp）
     private const val MAX_WIDTH_DP = 360
@@ -199,7 +202,7 @@ internal object BubbleNotificationOverlay {
         val entry = history.getOrNull(currentIndex) ?: return
         collapsed = true
         host.showBall(entry, history.size)
-        resizeWindow(dp(host.context, BALL_SIZE_DP), dp(host.context, BALL_SIZE_DP))
+        resizeWindow(dp(host.context, BALL_VIEW_SIZE_DP), dp(host.context, BALL_VIEW_SIZE_DP))
         handler.removeCallbacks(dismissRunnable)
     }
 
@@ -466,42 +469,9 @@ internal object BubbleNotificationOverlay {
         fun showBall(entry: BubbleEntry, count: Int) {
             ballMode = true
             removeAllViews()
-            val ball = FrameLayout(context)
-            val size = dp(BALL_SIZE_DP)
-            val circle = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                if (dark) {
-                    colors = intArrayOf(Color.rgb(57, 72, 84), Color.rgb(27, 39, 49))
-                    setStroke(dp(1), Color.argb(200, 104, 133, 151))
-                } else {
-                    colors = intArrayOf(Color.rgb(255, 255, 255), Color.rgb(196, 222, 240))
-                    setStroke(dp(1), Color.argb(210, 205, 225, 235))
-                }
-                orientation = GradientDrawable.Orientation.TOP_BOTTOM
-            }
-            ball.background = circle
-            ball.elevation = dp(ELEVATION_DP).toFloat()
-            entry.icon?.let { icon ->
-                val imageView = ImageView(context)
-                val cloned = runCatching { icon.constantState?.newDrawable()?.mutate() ?: icon }.getOrDefault(icon)
-                imageView.setImageDrawable(cloned)
-                imageView.scaleType = ImageView.ScaleType.CENTER_CROP
-                val pad = (size * 0.18f).toInt()
-                ball.addView(imageView, LayoutParams(size - pad * 2, size - pad * 2, Gravity.CENTER))
-            }
-            if (count > 1) {
-                val badge = TextView(context).apply {
-                    text = count.toString()
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-                    setTextColor(Color.WHITE)
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(Color.rgb(232, 66, 66))
-                    }
-                    gravity = Gravity.CENTER
-                }
-                val badgeSize = (size * 0.4f).toInt()
-                ball.addView(badge, LayoutParams(badgeSize, badgeSize, Gravity.TOP or Gravity.END))
+            val size = dp(BALL_VIEW_SIZE_DP)
+            val ball = BubbleBallView(context, dark).apply {
+                bind(entry.icon, count)
             }
             addView(ball, LayoutParams(size, size))
             cardView = null
@@ -738,6 +708,167 @@ internal object BubbleNotificationOverlay {
                 canvas.drawCircle(width - 7 * density, 6 * density, 2.4f * density, dotPaint)
             }
             canvas.restoreToCount(save)
+        }
+    }
+
+    /**
+     * 悬浮球：照抄原模块 r0 的绘制。
+     *
+     * 半径 29dp；下方偏移 3dp 的径向阴影；中心偏 (7dp, 8dp)、半径 29×1.35 的径向渐变主体；
+     * 27dp 内裁剪的高光层（径向白 26%、椭圆白描边 3.2dp、SweepGradient 外环 1.15dp）；
+     * 40dp 图标；右上偏移 (22dp, -22dp) 的 12dp 亮角标（径向白 + 描边 + 加粗数字）。
+     */
+    private class BubbleBallView(context: Context, private val dark: Boolean) : View(context) {
+
+        private val density = resources.displayMetrics.density
+        private var icon: Drawable? = null
+        private var count = 0
+
+        private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val innerStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = density
+            color = if (dark) Color.argb(200, 184, 213, 229) else Color.argb(190, 255, 255, 255)
+        }
+        private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val ovalStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3.2f * density
+            color = Color.argb(34, 255, 255, 255)
+        }
+        private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.15f * density
+        }
+        private val badgeShadow = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val badgeFill = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val badgeStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = density
+            color = Color.argb(215, 255, 255, 255)
+        }
+        private val badgeText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+            color = if (dark) Color.rgb(238, 246, 250) else Color.rgb(37, 48, 58)
+        }
+        private val clipPath = Path()
+        private var prepared = false
+
+        fun bind(drawable: Drawable?, badgeCount: Int) {
+            icon = runCatching { drawable?.constantState?.newDrawable()?.mutate() ?: drawable }.getOrNull()
+            count = badgeCount
+            prepared = false
+            invalidate()
+        }
+
+        private fun dp(value: Float): Float = value * density
+
+        private fun prepare() {
+            if (prepared || width == 0) return
+            prepared = true
+            val cx = width / 2f
+            val cy = height / 2f
+            val radius = dp(29f)
+            shadowPaint.shader = android.graphics.RadialGradient(
+                cx, cy + dp(3f), radius + dp(7f),
+                if (dark) Color.argb(75, 0, 0, 0) else Color.argb(44, 0, 0, 0),
+                Color.TRANSPARENT,
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+            bodyPaint.shader = android.graphics.RadialGradient(
+                cx - dp(7f), cy - dp(8f), radius * 1.35f,
+                if (dark) Color.argb(125, 133, 171, 194) else Color.argb(122, 255, 255, 255),
+                if (dark) Color.argb(90, 45, 65, 79) else Color.argb(68, 226, 234, 242),
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+            highlightPaint.shader = android.graphics.RadialGradient(
+                cx - dp(9f), cy - dp(11f), radius * 1.28f,
+                Color.argb(66, 255, 255, 255), Color.argb(18, 176, 216, 238),
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+            ringPaint.shader = android.graphics.SweepGradient(
+                cx,
+                cy,
+                intArrayOf(
+                    Color.argb(if (dark) 110 else 135, 255, 255, 255),
+                    Color.argb(if (dark) 72 else 92, 170, 220, 242),
+                    Color.argb(if (dark) 58 else 78, 225, 192, 220),
+                    Color.argb(if (dark) 110 else 135, 255, 255, 255),
+                ),
+                null,
+            )
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            if (width == 0) return
+            prepare()
+            val cx = width / 2f
+            val cy = height / 2f
+            val radius = dp(29f)
+
+            canvas.drawCircle(cx, cy + dp(3f), radius + dp(7f), shadowPaint)
+            canvas.drawCircle(cx, cy, radius, bodyPaint)
+            canvas.drawCircle(cx, cy, radius - dp(1f), innerStroke)
+
+            val save = canvas.save()
+            clipPath.reset()
+            clipPath.addCircle(cx, cy, radius - dp(2f), Path.Direction.CW)
+            canvas.clipPath(clipPath)
+            canvas.translate(-dp(3.2f), -dp(2.4f))
+            canvas.scale(1.13f, 0.91f, cx, cy)
+            canvas.drawCircle(cx, cy, radius, highlightPaint)
+            canvas.drawOval(
+                cx - radius * 0.78f,
+                cy - radius * 0.68f,
+                cx + radius * 0.82f,
+                cy + radius * 0.72f,
+                ovalStroke,
+            )
+            canvas.drawCircle(cx, cy, radius - dp(0.7f), ringPaint)
+            canvas.restoreToCount(save)
+
+            icon?.let { drawable ->
+                val half = dp(20f)
+                drawable.setBounds(
+                    (cx - half).toInt(),
+                    (cy - half).toInt(),
+                    (cx + half).toInt(),
+                    (cy + half).toInt(),
+                )
+                drawable.draw(canvas)
+            }
+
+            if (count > 0) {
+                val bx = cx + dp(22f)
+                val by = cy - dp(22f)
+                val badgeRadius = dp(12f)
+                badgeShadow.shader = android.graphics.RadialGradient(
+                    bx, by + dp(1.5f), badgeRadius + dp(4f),
+                    Color.argb(70, 0, 0, 0),
+                    Color.TRANSPARENT,
+                    android.graphics.Shader.TileMode.CLAMP,
+                )
+                badgeFill.shader = android.graphics.RadialGradient(
+                    bx - dp(3f), by - dp(4f), badgeRadius * 1.45f,
+                    Color.argb(245, 255, 255, 255),
+                    Color.argb(220, 212, 235, 247),
+                    android.graphics.Shader.TileMode.CLAMP,
+                )
+                canvas.drawCircle(bx, by + dp(1.5f), badgeRadius + dp(4f), badgeShadow)
+                canvas.drawCircle(bx, by, badgeRadius, badgeFill)
+                canvas.drawCircle(bx, by, badgeRadius - dp(0.8f), badgeStroke)
+
+                val label = if (count > 99) "99+" else count.toString()
+                badgeText.textSize = when {
+                    label.length >= 3 -> dp(8f)
+                    label.length == 2 -> dp(9f)
+                    else -> dp(10f)
+                }
+                val baseline = by - (badgeText.descent() + badgeText.ascent()) / 2f
+                canvas.drawText(label, bx, baseline, badgeText)
+            }
         }
     }
 }
