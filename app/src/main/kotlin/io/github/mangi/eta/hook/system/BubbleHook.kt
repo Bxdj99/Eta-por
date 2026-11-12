@@ -37,6 +37,7 @@ internal object BubbleHook {
     private const val EDGE_DP = 52f
     private const val SWIPE_DP = 38f
     private const val CENTER_TAP_DP = 37f
+    private const val CARD_TIMEOUT_MS = 8_000L
 
     private val handler = Handler(Looper.getMainLooper())
     private val queue = ArrayDeque<Entry>()
@@ -47,6 +48,9 @@ internal object BubbleHook {
     private var params: WindowManager.LayoutParams? = null
     private var host: Context? = null
     private var logger: ModuleLogger? = null
+    private var card: BubbleCardLayer? = null
+    private var cardParams: WindowManager.LayoutParams? = null
+    private val hideCardRunnable = Runnable { hideCard() }
 
     // 手势状态
     private var downRawX = 0f
@@ -57,7 +61,6 @@ internal object BubbleHook {
     private var longPressed = false
     private val holdRunnable = Runnable {
         longPressed = true
-        dragging = true
         ball?.alpha = 1f
     }
 
@@ -145,20 +148,145 @@ internal object BubbleHook {
         queue.removeAll { it.key == entry.key }
         queue.addLast(entry)
         swipeIndex = 0
-        handler.post { refresh() }
+        handler.post { refresh(showCard = true) }
     }
 
-    /** 刷新球：没有条目就移除窗口，有条目就就地更新图标与角标。 */
-    private fun refresh() {
+    /** 刷新球：没有条目就移除窗口，有条目就就地更新图标与角标；[showCard] 时同时弹内容卡片。 */
+    private fun refresh(showCard: Boolean = false) {
         val context = host ?: return
         val current = queue.firstOrNull()
         if (current == null) {
             removeBall()
+            hideCard()
             return
         }
         val view = ball ?: createBall(context) ?: return
         view.bind(current.icon, queue.size)
         view.visibility = android.view.View.VISIBLE
+        if (showCard) {
+            showCard(current)
+        } else {
+            updateCardContent(current)
+        }
+    }
+
+    private fun createCard(context: Context): BubbleCardLayer? {
+        val manager = window ?: return null
+        val density = context.resources.displayMetrics.density
+        val metrics = manager.currentWindowMetrics
+        val width = minOf((360 * density).toInt(), metrics.bounds.width() - (20 * density).toInt())
+        val height = BubbleCardLayer.heightPx(context)
+        val layoutParams = WindowManager.LayoutParams(
+            width,
+            height,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            windowAnimations = 0
+        }
+        val view = BubbleCardLayer(context, false)
+        view.setOnTouchListener { _, event -> handleCardTouch(event) }
+        return runCatching {
+            manager.addView(view, layoutParams)
+            card = view
+            cardParams = layoutParams
+            view
+        }.onFailure { logger?.warn("BubbleHook card addView failed: ${it.javaClass.simpleName}") }.getOrNull()
+    }
+
+    private fun showCard(entry: Entry) {
+        val context = host ?: return
+        val manager = window ?: return
+        val view = card ?: createCard(context) ?: return
+        val layoutParams = cardParams ?: return
+        view.bind(entry.icon, entry.title, entry.text, queue.size, queue.size > 1)
+        positionCard(manager, layoutParams, view)
+        view.visibility = android.view.View.VISIBLE
+        view.alpha = 1f
+        view.scaleX = 0.92f
+        view.scaleY = 0.92f
+        view.animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
+        handler.removeCallbacks(hideCardRunnable)
+        handler.postDelayed(hideCardRunnable, CARD_TIMEOUT_MS)
+    }
+
+    private fun updateCardContent(entry: Entry) {
+        val view = card ?: return
+        view.bind(entry.icon, entry.title, entry.text, queue.size, queue.size > 1)
+    }
+
+    private fun hideCard() {
+        handler.removeCallbacks(hideCardRunnable)
+        val view = card ?: return
+        view.animate().alpha(0f).setDuration(160L).withEndAction {
+            view.visibility = android.view.View.GONE
+            view.alpha = 1f
+        }.start()
+    }
+
+    private fun removeCard() {
+        handler.removeCallbacks(hideCardRunnable)
+        val view = card ?: return
+        runCatching { window?.removeView(view) }
+        card = null
+        cardParams = null
+    }
+
+    /** 卡片贴在球的内侧：球靠右就右对齐，否则左对齐；优先放在球下方，放不下就放上方。 */
+    private fun positionCard(
+        manager: WindowManager,
+        layoutParams: WindowManager.LayoutParams,
+        view: BubbleCardLayer,
+    ) {
+        val ballParams = params ?: return
+        val metrics = manager.currentWindowMetrics
+        val density = view.resources.displayMetrics.density
+        val gap = (8 * density).toInt()
+        val screenWidth = metrics.bounds.width()
+        val screenHeight = metrics.bounds.height()
+        val ballCenterX = ballParams.x + ballParams.width / 2f
+        val onRight = ballCenterX > screenWidth / 2f
+        layoutParams.x = if (onRight) {
+            screenWidth - layoutParams.width - gap
+        } else {
+            gap
+        }
+        val below = ballParams.y + ballParams.height + gap
+        layoutParams.y = if (below + layoutParams.height <= screenHeight - gap) {
+            below
+        } else {
+            (ballParams.y - layoutParams.height - gap).coerceAtLeast(gap)
+        }
+        runCatching { manager.updateViewLayout(view, layoutParams) }
+    }
+
+    /** 卡片上的手势：下滑关闭、点击打开（对齐 C0 的预览交互）。 */
+    private fun handleCardTouch(event: MotionEvent): Boolean {
+        val view = card ?: return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downRawX = event.rawX
+                downRawY = event.rawY
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                val dx = event.rawX - downRawX
+                val dy = event.rawY - downRawY
+                val density = view.resources.displayMetrics.density
+                if (abs(dy) > 24f * density || abs(dx) > 24f * density) {
+                    if (dy > 0) onSwipeDown() else onSwipeUp()
+                } else {
+                    onTap()
+                }
+                return true
+            }
+        }
+        return false
     }
 
     private fun createBall(context: Context): BubbleBallLayer? {
@@ -197,6 +325,7 @@ internal object BubbleHook {
         runCatching { window?.removeView(view) }
         ball = null
         params = null
+        removeCard()
     }
 
     private fun handleTouch(event: MotionEvent): Boolean {
@@ -219,10 +348,10 @@ internal object BubbleHook {
             MotionEvent.ACTION_MOVE -> {
                 val dx = event.rawX - downRawX
                 val dy = event.rawY - downRawY
-                if (!dragging && !longPressed) {
+                if (!dragging) {
                     if (abs(dx) * abs(dx) + abs(dy) * abs(dy) > (8f * density) * (8f * density)) {
-                        handler.removeCallbacks(holdRunnable)
-                        dragging = true
+                        // 只有长按之后移动才进入拖动；否则算滑动，交给 UP 判定
+                        if (longPressed) dragging = true else handler.removeCallbacks(holdRunnable)
                     }
                 }
                 if (dragging) {
@@ -239,6 +368,12 @@ internal object BubbleHook {
                 if (dragging) {
                     settle(current, view, manager, density)
                     dragging = false
+                    longPressed = false
+                    return true
+                }
+                if (longPressed) {
+                    longPressed = false
+                    toggleStack()
                     return true
                 }
                 val dx = event.rawX - downRawX
@@ -323,11 +458,66 @@ internal object BubbleHook {
     private fun onTap() {
         val entry = queue.pollFirst() ?: return
         swipeIndex = 0
+        openEntry(entry)
+        refresh()
+    }
+
+    private var stack: android.view.View? = null
+
+    /** 长按：展开通知栈（对齐 showExpandedStack）。再次长按或点遮罩收起。 */
+    private fun toggleStack() {
+        if (stack != null) {
+            hideStack()
+            return
+        }
+        if (queue.isEmpty()) return
+        val context = host ?: return
+        val manager = window ?: return
+        val items = queue.map { BubbleStackLayer.Item(it.title, it.text, it.icon) }
+        val view = BubbleStackLayer(
+            context,
+            false,
+            items,
+            onPick = { index ->
+                val list = queue.toList()
+                val entry = list.getOrNull(index)
+                hideStack()
+                if (entry != null) {
+                    queue.remove(entry)
+                    swipeIndex = 0
+                    openEntry(entry)
+                    refresh()
+                }
+            },
+            onDismiss = { hideStack() },
+        )
+        val layoutParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT,
+        )
+        runCatching {
+            manager.addView(view, layoutParams)
+            stack = view
+            hideCard()
+            logger?.info("BubbleHook: stack expanded (${items.size})")
+        }.onFailure { logger?.warn("BubbleHook stack failed: ${it.javaClass.simpleName}") }
+    }
+
+    private fun hideStack() {
+        val view = stack ?: return
+        runCatching { window?.removeView(view) }
+        stack = null
+    }
+
+    private fun openEntry(entry: Entry) {
         val context = host ?: return
         var sent = false
-        entry.intent?.let { pending ->
-            sent = runCatching { pending.send() }.isSuccess
-        }
+        entry.intent?.let { pending -> sent = runCatching { pending.send() }.isSuccess }
         if (!sent) {
             runCatching {
                 context.packageManager.getLaunchIntentForPackage(entry.packageName)?.apply {
@@ -336,8 +526,7 @@ internal object BubbleHook {
                 }
             }
         }
-        logger?.info("BubbleHook: tap ${entry.packageName} sent=$sent")
-        refresh()
+        logger?.info("BubbleHook: open ${entry.packageName} sent=$sent")
     }
 
     /** 下滑：关闭队头（对齐 dismissQueuedNotification）。 */
@@ -354,21 +543,22 @@ internal object BubbleHook {
                     view.scaleX = 1f
                     view.scaleY = 1f
                     view.translationY = 0f
-                    refresh()
+                    refresh(showCard = true)
                 }
                 .start()
         } else {
-            refresh()
+            refresh(showCard = true)
         }
     }
 
-    /** 上滑：在队列里循环切到下一条（对齐 handleUpSwipe 的索引轮转）。 */
+    /** 上滑：在队列里循环切到下一条（对齐 handleUpSwipe 的索引轮转），卡片内容跟着换。 */
     private fun onSwipeUp() {
         if (queue.size <= 1) return
         swipeIndex = (swipeIndex + 1) % queue.size
         val list = queue.toList()
         val entry = list.getOrNull(swipeIndex) ?: return
         ball?.bind(entry.icon, queue.size)
+        updateCardContent(entry)
         logger?.info("BubbleHook: swipe up → ${entry.packageName} (${swipeIndex + 1}/${queue.size})")
     }
 }
