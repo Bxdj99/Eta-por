@@ -65,6 +65,8 @@ internal object BubbleNotificationOverlay {
     private const val BODY_SP = 13f
     private const val BODY_TOP_MARGIN_DP = 2
     private const val ELEVATION_DP = 8
+    /** 卡片窗口高度：两行文字 + 上下内边距，原模块是精确 measure，这里给固定档避免 WRAP_CONTENT 测成 0。 */
+    private const val CARD_HEIGHT_DP = 70
 
     private val handler = Handler(Looper.getMainLooper())
     private val iconCache = HashMap<String, Drawable?>()
@@ -84,9 +86,16 @@ internal object BubbleNotificationOverlay {
     fun onPosted(context: Context, sbn: StatusBarNotification) {
         runCatching {
             prime(context)
-            if (!enabled()) return
-            if (!shouldShow(sbn)) return
-            val entry = buildEntry(context.applicationContext, sbn) ?: return
+            val switchOn = enabled()
+            val visible = shouldShow(sbn)
+            debug(context, "onPosted ${sbn.packageName} switch=$switchOn pass=$visible")
+            if (!switchOn) return
+            if (!visible) return
+            val entry = buildEntry(context.applicationContext, sbn)
+            if (entry == null) {
+                debug(context, "entry null ${sbn.packageName}")
+                return
+            }
             handler.post { show(context.applicationContext, entry) }
         }.onFailure { debug(context, "onPosted failed: $it") }
     }
@@ -164,6 +173,7 @@ internal object BubbleNotificationOverlay {
             debug(context, "attach failed for ${entry.packageName}")
             return
         }
+        val host = stage ?: return
         history.removeAll { it.key == entry.key }
         while (history.size >= MAX_HISTORY) history.removeAt(0)
         history.add(entry)
@@ -174,6 +184,7 @@ internal object BubbleNotificationOverlay {
         }
         renderCurrent(animate = true)
         scheduleDismiss()
+        debug(context, "shown ${entry.packageName} count=${history.size} stage=${stage != null}")
     }
 
     private fun scheduleDismiss() {
@@ -194,7 +205,7 @@ internal object BubbleNotificationOverlay {
         }
         collapsed = false
         host.showCard(entry, currentIndex > 0, history.size, animate)
-        resizeWindow(cardWidthPx(host.context), WindowManager.LayoutParams.WRAP_CONTENT)
+        resizeWindow(cardWidthPx(host.context), dp(host.context, CARD_HEIGHT_DP))
     }
 
     private fun collapseToBall() {
@@ -300,7 +311,7 @@ internal object BubbleNotificationOverlay {
         val width = cardWidthPx(context)
         val layoutParams = WindowManager.LayoutParams(
             width,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            dp(context, CARD_HEIGHT_DP),
             overlayWindowType(),
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
