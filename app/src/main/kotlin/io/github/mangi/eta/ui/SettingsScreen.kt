@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Inventory
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Lock
@@ -482,6 +483,16 @@ private fun SettingsPageContent(
                         key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_ENABLED,
                         icon = Icons.Rounded.Layers,
                         iconTint = SettingsIconColors.Blue,
+                    )
+                    CouiIconDivider()
+                    SwitchPref(
+                        context = context,
+                        prefs = agentPrefs,
+                        title = "通知气泡",
+                        summary = "通知到达时在屏幕上弹气泡，点击打开应用、上滑消除",
+                        key = Prefs.Keys.AGENT_BUBBLE_NOTIFICATIONS,
+                        icon = Icons.Rounded.NotificationsActive,
+                        iconTint = SettingsIconColors.Green,
                     )
                     CouiIconDivider()
                     SwitchPref(

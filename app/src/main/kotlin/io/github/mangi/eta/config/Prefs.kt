@@ -58,6 +58,15 @@ internal object Prefs {
         const val AGENT_RUNTIME_CONFIG_JSON = "agent_runtime_config_json"
         const val AGENT_DISABLED_TOOLS_JSON = "agent_disabled_tools_json"
 
+        /** 通知到达时是否在屏幕上弹出气泡（Bubble Notifications 的原生重实现）。 */
+        const val AGENT_BUBBLE_NOTIFICATIONS = "agent_bubble_notifications"
+
+        /** 气泡排除的应用包名，JSON 数组字符串。 */
+        const val AGENT_BUBBLE_EXCLUDED_JSON = "agent_bubble_excluded_json"
+
+        /** 气泡窗口位置记忆，格式 "x,y"（绝对像素，窗口左上角）。 */
+        const val AGENT_BUBBLE_POSITION = "agent_bubble_position"
+
         /** 全部布尔开关及其默认值。 */
         val BOOLEAN_DEFAULTS: Map<String, Boolean> = mapOf(
             POWER_KEY_TAKEOVER to false,
@@ -80,6 +89,7 @@ internal object Prefs {
             AGENT_VIRTUAL_DISPLAY_ENABLED to true,
             AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE to true,
             AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD to true,
+            AGENT_BUBBLE_NOTIFICATIONS to true,
         )
 
         /** 由 Eta Runtime 最终裁决、不要求 Xposed 框架在线的开关。 */
@@ -95,6 +105,7 @@ internal object Prefs {
             AGENT_VIRTUAL_DISPLAY_ENABLED,
             AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE,
             AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
+            AGENT_BUBBLE_NOTIFICATIONS,
         )
     }
 
