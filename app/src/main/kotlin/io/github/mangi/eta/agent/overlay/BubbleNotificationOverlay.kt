@@ -221,33 +221,98 @@ internal object BubbleNotificationOverlay {
     private fun expandFromBall() {
         if (!collapsed) return
         collapsed = false
+        val current = params
+        val stack = stage
+        val manager = windowManager
+        if (current != null && stack != null && manager != null) {
+            // 球可能是半贴在屏幕外，展开成卡片前先把窗口拉回屏内
+            val metrics = runCatching { manager.currentWindowMetrics }.getOrNull()
+            if (metrics != null) {
+                current.x = current.x.coerceIn(0, (metrics.bounds.width() - current.width).coerceAtLeast(0))
+                current.y = current.y.coerceIn(0, (metrics.bounds.height() - current.height).coerceAtLeast(0))
+                runCatching { manager.updateViewLayout(stack, current) }
+            }
+            stack.alpha = 1f
+        }
         renderCurrent(animate = true)
         scheduleDismiss()
     }
 
     private fun moveBy(dx: Int, dy: Int) {
         val current = params ?: return
-        current.x += dx
-        current.y += dy
         val stack = stage ?: return
         val manager = windowManager ?: return
+        val metrics = runCatching { manager.currentWindowMetrics }.getOrNull()
+        val screenWidth = metrics?.bounds?.width() ?: return
+        val screenHeight = metrics?.bounds?.height() ?: return
+        val density = stack.resources.displayMetrics.density
+        val half = current.width / 2
+        // 球允许一半滑出屏幕（吸附后可贴边半隐），上下留 8dp/12dp 边距
+        current.x = (current.x + dx).coerceIn(-half, screenWidth - half)
+        current.y = (current.y + dy).coerceIn(
+            (8 * density).toInt(),
+            (screenHeight - current.height - (12 * density).toInt()).coerceAtLeast((8 * density).toInt()),
+        )
         runCatching { manager.updateViewLayout(stack, current) }
     }
 
-    private fun snapToEdge() {
+    /** 松手结算：拖到底部删掉，靠边吸附半隐，其余回弹到范围内。 */
+    private fun settleBall() {
         val current = params ?: return
         val stack = stage ?: return
         val manager = windowManager ?: return
         val metrics = runCatching { manager.currentWindowMetrics }.getOrNull() ?: return
+        val density = stack.resources.displayMetrics.density
         val screenWidth = metrics.bounds.width()
         val screenHeight = metrics.bounds.height()
-        val margin = dp(stack.context, 8)
-        current.x = if (current.x + current.width / 2 < screenWidth / 2) margin else screenWidth - current.width - margin
-        current.y = current.y.coerceIn(margin, (screenHeight - stack.height - margin).coerceAtLeast(margin))
-        runCatching { manager.updateViewLayout(stack, current) }
+        val edge = (52 * density).toInt()
+        if (current.y >= screenHeight - edge) {
+            // 拖到底部：缩小淡出后移除
+            stack.animate()
+                .alpha(0f)
+                .scaleX(0.38f)
+                .scaleY(0.38f)
+                .translationY(76f * density)
+                .setDuration(240L)
+                .withEndAction { detach() }
+                .start()
+            return
+        }
+        val center = current.x + current.width / 2f
+        when {
+            center <= edge -> dockEdge(current, stack, manager, -1, screenWidth)
+            center >= screenWidth - edge -> dockEdge(current, stack, manager, 1, screenWidth)
+            else -> {
+                // 回弹到可用范围内
+                current.y = current.y.coerceIn((8 * density).toInt(), screenHeight - current.height)
+                current.x = current.x.coerceIn(0, screenWidth - current.width)
+                runCatching { manager.updateViewLayout(stack, current) }
+                stack.alpha = 1f
+            }
+        }
         Prefs.localAgentPreferences()?.edit()
             ?.putString(Prefs.Keys.AGENT_BUBBLE_POSITION, "${current.x},${current.y}")
             ?.apply()
+    }
+
+    /** 吸附到左右边缘：球一半移出屏幕，260ms 减速动画，随后半透明。 */
+    private fun dockEdge(
+        current: WindowManager.LayoutParams,
+        stack: android.view.View,
+        manager: WindowManager,
+        side: Int,
+        screenWidth: Int,
+    ) {
+        val target = if (side < 0) -current.width / 2 else screenWidth - current.width / 2
+        val animator = android.animation.ValueAnimator.ofInt(current.x, target)
+        animator.duration = 260L
+        animator.interpolator = android.view.animation.DecelerateInterpolator(1.7f)
+        animator.addUpdateListener { value ->
+            current.x = value.animatedValue as Int
+            runCatching { manager.updateViewLayout(stack, current) }
+        }
+        animator.start()
+        stack.animate().alpha(0.5f).setDuration(180L).start()
     }
 
     private fun resizeWindow(width: Int, height: Int) {
@@ -341,7 +406,7 @@ internal object BubbleNotificationOverlay {
             onHold = { collapseToBall() }
             onBallTap = { expandFromBall() }
             onDrag = { dx, dy -> moveBy(dx, dy) }
-            onDragEnd = { snapToEdge() }
+            onDragEnd = { settleBall() }
         }
         return runCatching {
             manager.addView(host, layoutParams)
@@ -565,7 +630,11 @@ internal object BubbleNotificationOverlay {
                         if (dragging) {
                             onDragEnd?.invoke()
                         } else if (!justCollapsed) {
-                            onBallTap?.invoke()
+                            // 原模块只认球心 37dp 半径内的点击，边缘不触发
+                            val radius = 37f * density
+                            val dx = event.x - width / 2f
+                            val dy = event.y - height / 2f
+                            if (dx * dx + dy * dy <= radius * radius) onBallTap?.invoke()
                         }
                     } else if (!swiped && !held) {
                         onTap?.invoke()
