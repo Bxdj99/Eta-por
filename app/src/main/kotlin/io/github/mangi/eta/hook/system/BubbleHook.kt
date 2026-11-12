@@ -145,7 +145,13 @@ internal object BubbleHook {
     private fun attachHost(application: Application) {
         if (host != null) return
         host = application
+        // 位置记忆读写自己存（remote prefs 在 hook 侧只读，写不回去）
+        runCatching {
+            localPrefs = application.getSharedPreferences("eta_bubble_hook", Context.MODE_PRIVATE)
+        }
     }
+
+    private var localPrefs: android.content.SharedPreferences? = null
 
     // ---- 配置读取（SystemUI 进程只能读框架下发的 remote prefs） ----
 
@@ -229,6 +235,7 @@ internal object BubbleHook {
         handler.postDelayed(dimRunnable, BALL_DIM_DELAY_MS)
         if (showCard) {
             showCard(current)
+            showTicker(current)
         } else {
             updateCardContent(current)
         }
@@ -373,12 +380,30 @@ internal object BubbleHook {
         val ballCenterX = ballRect.centerX()
         val ballCenterY = ballRect.centerY()
 
-        var x = if (ballCenterX < screenWidth / 2) {
-            ballRect.right + margin
-        } else {
-            ballRect.left - cardWidth - margin
+        // 方位偏好（原 content_preview_position）：0 自动、1 上、2 下，其余按左右自动
+        val preference = cfgInt(Prefs.Keys.AGENT_BUBBLE_PREVIEW_POSITION, 0)
+        var x: Int
+        var y: Int
+        when (preference) {
+            1 -> {
+                x = (ballCenterX - cardWidth / 2).coerceIn(left, right)
+                y = ballRect.top - cardHeight - margin
+                if (y < top) y = ballRect.bottom + margin
+            }
+            2 -> {
+                x = (ballCenterX - cardWidth / 2).coerceIn(left, right)
+                y = ballRect.bottom + margin
+                if (y > bottom) y = ballRect.top - cardHeight - margin
+            }
+            else -> {
+                x = if (ballCenterX < screenWidth / 2) {
+                    ballRect.right + margin
+                } else {
+                    ballRect.left - cardWidth - margin
+                }
+                y = ballCenterY - cardHeight / 2
+            }
         }
-        var y = ballCenterY - cardHeight / 2
         x = x.coerceIn(left, right)
         y = y.coerceIn(top, bottom)
 
@@ -450,14 +475,23 @@ internal object BubbleHook {
             val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
                 android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
             )
-            // 位置记忆按百分比（原模块 portrait_x/y_percent + dock_edge），横竖屏各存一份
-            val xPercent = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_X_PERCENT, Prefs.Keys.AGENT_BUBBLE_LAND_X_PERCENT), 100)
-            val yPercent = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_Y_PERCENT, Prefs.Keys.AGENT_BUBBLE_LAND_Y_PERCENT), 35)
+            // 位置记忆：优先用上次拖动后的绝对坐标（横竖屏各一份），否则按配置百分比放置
+            val landscape = context.resources.configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            val savedX = localPrefs?.getInt(if (landscape) "x_land" else "x_port", Int.MIN_VALUE) ?: Int.MIN_VALUE
+            val savedY = localPrefs?.getInt(if (landscape) "y_land" else "y_port", Int.MIN_VALUE) ?: Int.MIN_VALUE
+            if (savedX != Int.MIN_VALUE && savedY != Int.MIN_VALUE) {
+                x = savedX
+                y = savedY
+            } else {
+                val xPercent = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_X_PERCENT, Prefs.Keys.AGENT_BUBBLE_LAND_X_PERCENT), 100)
+                val yPercent = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_Y_PERCENT, Prefs.Keys.AGENT_BUBBLE_LAND_Y_PERCENT), 35)
+                val usableWidth = (metrics.bounds.width() - insets.left - insets.right - size).coerceAtLeast(1)
+                val usableHeight = (metrics.bounds.height() - insets.top - insets.bottom - size).coerceAtLeast(1)
+                x = insets.left + (xPercent * usableWidth / 100)
+                y = insets.top + (yPercent * usableHeight / 100)
+            }
             val dock = cfgInt(orientationKey(Prefs.Keys.AGENT_BUBBLE_DOCK_EDGE, Prefs.Keys.AGENT_BUBBLE_LAND_DOCK_EDGE), 0)
-            val usableWidth = (metrics.bounds.width() - insets.left - insets.right - size).coerceAtLeast(1)
-            val usableHeight = (metrics.bounds.height() - insets.top - insets.bottom - size).coerceAtLeast(1)
-            x = insets.left + (xPercent * usableWidth / 100)
-            y = insets.top + (yPercent * usableHeight / 100)
             if (dock < 0) x = -size / 2
             if (dock > 0) x = metrics.bounds.width() - size / 2
             windowAnimations = 0
@@ -668,6 +702,15 @@ internal object BubbleHook {
             .setInterpolator(android.view.animation.DecelerateInterpolator())
             .start()
         // 吸附动画结束后让卡片跟随到球的最终位置
+        runCatching {
+            val landscape = view.resources.configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            localPrefs?.edit()
+                ?.putInt(if (landscape) "x_land" else "x_port", current.x)
+                ?.putInt(if (landscape) "y_land" else "y_port", current.y)
+                ?.putBoolean(if (landscape) "dock_land" else "dock_port", isDocked)
+                ?.apply()
+        }
         handler.postDelayed({
             val followCard = card
             val followParams = cardParams
@@ -705,6 +748,56 @@ internal object BubbleHook {
     }
 
     private var stack: android.view.View? = null
+    private var ticker: StatusTickerLayer? = null
+    private var tickerParams: WindowManager.LayoutParams? = null
+
+    /** 状态栏滚动条：在状态栏高度位置叠一条半透明滚动字幕（对应 status_scroll）。 */
+    private fun showTicker(entry: Entry) {
+        if (!cfgBool(Prefs.Keys.AGENT_BUBBLE_STATUS_SCROLL, true)) return
+        val context = host ?: return
+        val manager = window ?: return
+        val density = context.resources.displayMetrics.density
+        val metrics = manager.currentWindowMetrics
+        val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+            android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
+        )
+        val height = (28 * density).toInt()
+        var view = ticker
+        if (view == null) {
+            view = StatusTickerLayer(context, false)
+            val layoutParams = WindowManager.LayoutParams(
+                (metrics.bounds.width() - (16 * density).toInt()).coerceAtLeast((120 * density).toInt()),
+                height,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = (8 * density).toInt()
+                y = (insets.top + (4 * density)).toInt()
+                windowAnimations = 0
+            }
+            runCatching { manager.addView(view, layoutParams) }
+            ticker = view
+            tickerParams = layoutParams
+        }
+        view.text = "${entry.title}：${entry.text}"
+        view.translationX = 0f
+        view.visibility = android.view.View.VISIBLE
+        val rounds = cfgInt(Prefs.Keys.AGENT_BUBBLE_STATUS_ROUNDS, 2).coerceIn(1, 5)
+        val target = view
+        target.post {
+            target.startScroll(rounds) {
+                runCatching { manager.removeView(target) }
+                if (ticker === target) {
+                    ticker = null
+                    tickerParams = null
+                }
+            }
+        }
+    }
 
     /** 长按：展开通知栈（对齐 showExpandedStack）。再次长按或点遮罩收起。 */
     private fun toggleStack() {
@@ -761,12 +854,27 @@ internal object BubbleHook {
         var sent = false
         entry.intent?.let { pending -> sent = runCatching { pending.send() }.isSuccess }
         if (!sent) {
-            runCatching {
-                context.packageManager.getLaunchIntentForPackage(entry.packageName)?.apply {
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(this)
+            // 先尝试自由小窗（对齐原模块 openNotificationInFreeform），失败再普通启动
+            val opened = runCatching {
+                val intent = context.packageManager.getLaunchIntentForPackage(entry.packageName)
+                    ?: return@runCatching false
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                val options = android.app.ActivityOptions.makeBasic()
+                options.javaClass
+                    .getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                    .invoke(options, 5) // WINDOWING_MODE_FREEFORM
+                context.startActivity(intent, options.toBundle())
+                true
+            }.getOrDefault(false)
+            if (!opened) {
+                runCatching {
+                    context.packageManager.getLaunchIntentForPackage(entry.packageName)?.apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(this)
+                    }
                 }
             }
+            sent = opened
         }
         logger?.info("BubbleHook: open ${entry.packageName} sent=$sent")
     }
