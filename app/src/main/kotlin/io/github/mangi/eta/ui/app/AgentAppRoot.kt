@@ -500,7 +500,20 @@ fun AgentAppRoot(
                 WebToolsSettingsScreen(onBack = ::popRoute)
             }
             entry<AppRoute.BubbleSettings>(swipeDismiss = swipeDismiss) {
-                io.github.mangi.eta.ui.screens.tools.BubbleSettingsScreen(onBack = ::popRoute)
+                io.github.mangi.eta.ui.screens.tools.BubbleSettingsScreen(
+                    onBack = ::popRoute,
+                    onOpenPicker = { mode -> pushRoute(AppRoute.BubbleAppPicker(mode)) },
+                    onOpenPlacement = { pushRoute(AppRoute.BubblePlacement) },
+                )
+            }
+            entry<AppRoute.BubblePlacement>(swipeDismiss = swipeDismiss) {
+                io.github.mangi.eta.ui.screens.tools.BubblePlacementScreen(onBack = ::popRoute)
+            }
+            entry<AppRoute.BubbleAppPicker>(swipeDismiss = swipeDismiss) { route ->
+                io.github.mangi.eta.ui.screens.tools.BubbleAppPickerScreen(
+                    mode = route.mode,
+                    onBack = ::popRoute,
+                )
             }
             entry<AppRoute.Subagents>(swipeDismiss = swipeDismiss) {
                 SubagentSettingsScreen(onBack = ::popRoute)

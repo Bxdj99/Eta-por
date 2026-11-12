@@ -12,6 +12,7 @@ import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.ui.components.coui.CouiPageBottomSpacer
 import io.github.mangi.eta.ui.components.coui.CouiScaffoldPage
 import io.github.mangi.eta.ui.components.coui.CouiSliderPreference
+import io.github.mangi.eta.ui.components.coui.CouiPreference
 import io.github.mangi.eta.ui.components.coui.CouiSwitchPreference
 import kotlin.math.roundToInt
 
@@ -22,7 +23,11 @@ import kotlin.math.roundToInt
  * 仅贴边）、球（变暗/自动消失/装饰动画/亮屏提示）、交互（下滑清通知）、状态栏（滚动/轮数）。
  */
 @Composable
-internal fun BubbleSettingsScreen(onBack: () -> Unit) {
+internal fun BubbleSettingsScreen(
+    onBack: () -> Unit,
+    onOpenPicker: (String) -> Unit = {},
+    onOpenPlacement: () -> Unit = {},
+) {
     val prefs = remember { Prefs.localAgentPreferences() }
 
     fun boolOf(key: String, default: Boolean): Boolean =
@@ -50,11 +55,28 @@ internal fun BubbleSettingsScreen(onBack: () -> Unit) {
     var timeoutDraft by remember {
         mutableStateOf(Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_TIMEOUT_SEC, 8).toFloat())
     }
+    var positionPref by remember {
+        mutableStateOf(Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_PREVIEW_POSITION, 0))
+    }
     var roundsDraft by remember {
         mutableStateOf(Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_STATUS_ROUNDS, 2).toFloat())
     }
 
     CouiScaffoldPage(title = "通知气泡", onBack = onBack) {
+        Group(title = "应用范围") {
+            CouiPreference(
+                title = "白名单应用",
+                summary = "只对这些应用生效，留空表示全部",
+                onClick = { onOpenPicker("white") },
+            )
+            Divider()
+            CouiPreference(
+                title = "黑名单应用",
+                summary = "这些应用不弹气泡",
+                onClick = { onOpenPicker("black") },
+            )
+        }
+
         Group(title = "通知气泡") {
             CouiSwitchPreference(
                 title = "启用通知气泡",
@@ -124,6 +146,24 @@ internal fun BubbleSettingsScreen(onBack: () -> Unit) {
                 },
             )
             Divider()
+            CouiPreference(
+                title = "卡片方位",
+                summary = when (positionPref) {
+                    1 -> "固定在球上方"
+                    2 -> "固定在球下方"
+                    else -> "自动（贴在球的内侧）"
+                },
+                value = when (positionPref) {
+                    1 -> "上"
+                    2 -> "下"
+                    else -> "自动"
+                },
+                onClick = {
+                    positionPref = (positionPref + 1) % 3
+                    Prefs.setBubbleInt(Prefs.Keys.AGENT_BUBBLE_PREVIEW_POSITION, positionPref)
+                },
+            )
+            Divider()
             CouiSwitchPreference(
                 title = "仅贴边时显示卡片",
                 summary = "球吸附在屏幕边缘时才弹内容卡片",
@@ -132,6 +172,14 @@ internal fun BubbleSettingsScreen(onBack: () -> Unit) {
                     edgeOnly = value
                     setBool(Prefs.Keys.AGENT_BUBBLE_EDGE_ONLY, value)
                 },
+            )
+        }
+
+        Group(title = "位置与方位") {
+            CouiPreference(
+                title = "摆放位置",
+                summary = "拖动小球选择停靠位置",
+                onClick = onOpenPlacement,
             )
         }
 

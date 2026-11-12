@@ -609,6 +609,8 @@ private fun titleForRoute(route: AppRoute?): String = when (route) {
     is AppRoute.Tools -> stringResource(R.string.route_tools)
     is AppRoute.WebToolsSettings -> stringResource(R.string.web_tools_settings_title)
     is AppRoute.BubbleSettings -> "通知气泡"
+    is AppRoute.BubbleAppPicker -> if (route.mode == "white") "白名单应用" else "黑名单应用"
+    is AppRoute.BubblePlacement -> "摆放位置"
     is AppRoute.Skills -> stringResource(R.string.route_skills)
     is AppRoute.Tasks -> "自动任务"
     is AppRoute.Subagents -> "Subagent"
