@@ -167,7 +167,7 @@ internal object Prefs {
 
     /** 本地 Agent 配置里的整数项（灵屏分辨率/帧率/宽限这类可调参数）。 */
     fun getAgentInt(key: String, default: Int): Int =
-        localAgent?.getInt(key, default) ?: default
+        runCatching { localAgent?.getInt(key, default) ?: default }.getOrDefault(default)
 
     /** 写整数项并同步落盘，返回值表示是否真的写成功。 */
     fun setAgentInt(key: String, value: Int): Boolean =

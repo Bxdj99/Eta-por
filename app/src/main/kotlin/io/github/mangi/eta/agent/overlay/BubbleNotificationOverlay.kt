@@ -80,7 +80,8 @@ internal object BubbleNotificationOverlay {
     private var currentIndex = -1
     private var collapsed = false
 
-    private val dismissRunnable = Runnable { dismissAll(animate = true) }
+    /** 超时后不是消失，而是收成悬浮球常驻，点球可重新展开。 */
+    private val dismissRunnable = Runnable { collapseToBall() }
 
     /** 通知监听回调入口；异常一律吞掉，绝不影响通知入库。 */
     fun onPosted(context: Context, sbn: StatusBarNotification) {
@@ -261,19 +262,27 @@ internal object BubbleNotificationOverlay {
 
     private fun activateCurrent() {
         val entry = history.getOrNull(currentIndex) ?: return
-        val context = hostContext(lastContext ?: return)
+        val context = lastContext ?: stage?.context ?: return
         val pending = entry.contentIntent
-        if (pending != null && runCatching { pending.send() }.isSuccess) {
-            dismissCurrent()
-            return
+        debug(context, "tap ${entry.packageName} intent=${pending != null}")
+        if (pending != null) {
+            val result = runCatching { pending.send() }
+            debug(context, "pending.send ok=${result.isSuccess} err=${result.exceptionOrNull()?.javaClass?.simpleName}")
+            if (result.isSuccess) {
+                dismissCurrent()
+                return
+            }
         }
         runCatching {
             val intent: Intent? = context.packageManager.getLaunchIntentForPackage(entry.packageName)
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                 context.startActivity(intent)
+                debug(context, "launchIntent started ${entry.packageName}")
+            } else {
+                debug(context, "no launch intent ${entry.packageName}")
             }
-        }
+        }.onFailure { debug(context, "startActivity failed: $it") }
         dismissCurrent()
     }
 
@@ -459,10 +468,15 @@ internal object BubbleNotificationOverlay {
         private var held = false
         private var swiped = false
         private var ballMode = false
+        /** 长按刚收起成球时，抬手不应立刻又展开回卡片。 */
+        private var justCollapsed = false
 
         private val holdRunnable = Runnable {
             held = true
-            if (!ballMode) onHold?.invoke()
+            if (!ballMode) {
+                justCollapsed = true
+                onHold?.invoke()
+            }
         }
 
         fun showCard(entry: BubbleEntry, hasPrevious: Boolean, count: Int, animate: Boolean) {
@@ -518,6 +532,7 @@ internal object BubbleNotificationOverlay {
                     dragging = false
                     held = false
                     swiped = false
+                    justCollapsed = false
                     postDelayed(holdRunnable, HOLD_MS)
                     return true
                 }
@@ -547,13 +562,18 @@ internal object BubbleNotificationOverlay {
                 MotionEvent.ACTION_UP -> {
                     removeCallbacks(holdRunnable)
                     if (ballMode) {
-                        if (!dragging) onBallTap?.invoke() else onDragEnd?.invoke()
+                        if (dragging) {
+                            onDragEnd?.invoke()
+                        } else if (!justCollapsed) {
+                            onBallTap?.invoke()
+                        }
                     } else if (!swiped && !held) {
                         onTap?.invoke()
                     }
                     dragging = false
                     held = false
                     swiped = false
+                    justCollapsed = false
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
