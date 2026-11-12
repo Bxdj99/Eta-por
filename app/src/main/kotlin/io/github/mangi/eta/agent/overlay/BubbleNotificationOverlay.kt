@@ -5,7 +5,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Drawable
@@ -158,18 +161,17 @@ internal object BubbleNotificationOverlay {
         while (bubbles.size >= MAX_BUBBLES) bubbles.removeAt(0)
         bubbles.add(entry)
         stack.alpha = 1f
-        stack.render(bubbles)
+        stack.render(bubbles, animateLast = true)
         resizeWindow()
-        // 展开动画与原模块一致：从中间的小尺寸淡入放大
-        stack.scaleX = 0.92f
-        stack.scaleY = 0.92f
-        stack.animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
         scheduleDismiss()
     }
 
     private fun scheduleDismiss() {
         handler.removeCallbacks(dismissRunnable)
-        handler.postDelayed(dismissRunnable, AUTO_DISMISS_MS)
+        val seconds = runCatching {
+            Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_TIMEOUT_SEC, 8)
+        }.getOrDefault(8).coerceIn(3, 30)
+        handler.postDelayed(dismissRunnable, seconds * 1000L)
     }
 
     private fun hostContext(fallback: Context): Context =
@@ -267,7 +269,7 @@ internal object BubbleNotificationOverlay {
         runCatching { manager.updateViewLayout(stack, current) }
     }
 
-    /** 原模块公式：宽度 = min(360dp, 屏宽 - inset - 20dp)，且不小于 180dp。 */
+    /** 原模块公式：宽度 = min(配置宽度, 屏宽 - inset - 20dp)，且不小于 180dp。 */
     private fun bubbleWidthPx(context: Context): Int {
         val density = context.resources.displayMetrics.density
         val manager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
@@ -277,7 +279,10 @@ internal object BubbleNotificationOverlay {
             android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout()
         )
         val horizontalInset = (insets?.left ?: 0) + (insets?.right ?: 0)
-        val maxWidth = ((MAX_WIDTH_DP * density).toInt())
+        val configuredDp = runCatching {
+            Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_WIDTH_DP, MAX_WIDTH_DP)
+        }.getOrDefault(MAX_WIDTH_DP).coerceIn(MIN_WIDTH_DP, MAX_WIDTH_DP)
+        val maxWidth = (configuredDp * density).toInt()
         val available = (screenWidth - horizontalInset - (SIDE_MARGIN_DP * density).toInt())
         val minWidth = (MIN_WIDTH_DP * density).toInt()
         return min(maxWidth, available).coerceAtLeast(minWidth)
@@ -378,22 +383,42 @@ internal object BubbleNotificationOverlay {
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
 
-        fun render(entries: List<BubbleEntry>) {
+        fun render(entries: List<BubbleEntry>, animateLast: Boolean = false) {
             removeAllViews()
             entries.forEachIndexed { index, entry ->
                 addView(buildCard(entry), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                     if (index > 0) topMargin = dp(BUBBLE_GAP_DP)
                 })
             }
+            if (animateLast) (getChildAt(childCount - 1) as? BubbleCard)?.let(::revealCard)
         }
 
-        private fun buildCard(entry: BubbleEntry): LinearLayout {
-            val card = LinearLayout(context)
+        /** 照抄原模块的展开动画：330ms，三角形裁剪从边缘扫入 + 从 0.6 放大到 1。 */
+        private fun revealCard(card: BubbleCard) {
+            card.reveal = 0f
+            card.scaleX = 0.6f
+            card.scaleY = 0.6f
+            android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 330L
+                interpolator = android.view.animation.DecelerateInterpolator()
+                addUpdateListener { animator ->
+                    val progress = animator.animatedValue as Float
+                    card.reveal = progress
+                    card.scaleX = 0.6f + 0.4f * progress
+                    card.scaleY = 0.6f + 0.4f * progress
+                }
+                start()
+            }
+        }
+
+        private fun buildCard(entry: BubbleEntry): BubbleCard {
+            val card = BubbleCard(context, dark)
             card.orientation = HORIZONTAL
             card.gravity = Gravity.CENTER_VERTICAL
             card.setPadding(dp(CONTENT_PADDING_H_DP), dp(CONTENT_PADDING_V_DP), dp(CONTENT_PADDING_H_DP), dp(CONTENT_PADDING_V_DP))
             card.elevation = dp(ELEVATION_DP).toFloat()
             card.isClickable = true
+            card.cornerRadiusPx = dp(CORNER_RADIUS_DP).toFloat()
 
             val background = GradientDrawable().apply {
                 orientation = GradientDrawable.Orientation.TOP_BOTTOM
@@ -408,6 +433,10 @@ internal object BubbleNotificationOverlay {
                 } else {
                     setStroke(dp(1), Color.argb(210, 205, 225, 235))
                 }
+                val opacity = runCatching {
+                    Prefs.getAgentInt(Prefs.Keys.AGENT_BUBBLE_OPACITY_PCT, 100)
+                }.getOrDefault(100).coerceIn(40, 100)
+                alpha = opacity * 255 / 100
             }
             card.background = background
 
@@ -508,6 +537,71 @@ internal object BubbleNotificationOverlay {
                 if (y >= child.top && y <= child.bottom) return index
             }
             return -1
+        }
+    }
+
+    /**
+     * 气泡卡片：渐变背景 + 边缘扫入裁剪 + 1.05dp 高光描边。
+     * 裁剪与描边逻辑照抄原模块 C0.dispatchDraw（三角形 clipPath + 圆角内缩描边）。
+     */
+    private class BubbleCard(context: Context, private val dark: Boolean) : LinearLayout(context) {
+
+        var reveal = 1f
+            set(value) {
+                field = value
+                invalidate()
+            }
+        var cornerRadiusPx = 0f
+        /** 吸附边：0 左、1 右、2 上、3 下，决定扫入方向。 */
+        var dockEdge = 1
+
+        private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.05f * resources.displayMetrics.density
+        }
+        private val clipPath = Path()
+
+        override fun dispatchDraw(canvas: Canvas) {
+            val save = canvas.save()
+            if (reveal < 0.999f && width > 1 && height > 1) {
+                val w = width.toFloat()
+                val hgt = height.toFloat()
+                val half = reveal * 0.5f
+                clipPath.reset()
+                when (dockEdge) {
+                    0 -> {
+                        clipPath.moveTo(0f, 0f)
+                        clipPath.lineTo(0f, hgt)
+                        clipPath.lineTo(w - hgt * half, hgt / 2f)
+                    }
+                    1 -> {
+                        clipPath.moveTo(w, 0f)
+                        clipPath.lineTo(w, hgt)
+                        clipPath.lineTo(hgt * half, hgt / 2f)
+                    }
+                    2 -> {
+                        clipPath.moveTo(0f, 0f)
+                        clipPath.lineTo(w, 0f)
+                        clipPath.lineTo(w / 2f, hgt - w * half)
+                    }
+                    else -> {
+                        clipPath.moveTo(0f, hgt)
+                        clipPath.lineTo(w / 2f, w * half)
+                        clipPath.lineTo(w, hgt)
+                    }
+                }
+                clipPath.close()
+                canvas.clipPath(clipPath)
+            }
+            super.dispatchDraw(canvas)
+            val density = resources.displayMetrics.density
+            if (width > 24 * density && height > 20 * density) {
+                highlight.color = if (dark) Color.argb(86, 205, 231, 242) else Color.argb(108, 255, 255, 255)
+                val inset = highlight.strokeWidth
+                val radius = (cornerRadiusPx - inset).coerceAtLeast(1f)
+                canvas.drawRoundRect(inset, inset, width - inset, height - inset, radius, radius, highlight)
+            }
+            canvas.restoreToCount(save)
         }
     }
 

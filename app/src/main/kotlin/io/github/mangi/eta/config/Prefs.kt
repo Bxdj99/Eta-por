@@ -67,6 +67,15 @@ internal object Prefs {
         /** 气泡窗口位置记忆，格式 "x,y"（绝对像素，窗口左上角）。 */
         const val AGENT_BUBBLE_POSITION = "agent_bubble_position"
 
+        /** 气泡宽度上限（dp），对应原模块 content_preview_width_dp。 */
+        const val AGENT_BUBBLE_WIDTH_DP = "agent_bubble_width_dp"
+
+        /** 气泡停留时长（秒），对应原模块 content_preview_timeout。 */
+        const val AGENT_BUBBLE_TIMEOUT_SEC = "agent_bubble_timeout_sec"
+
+        /** 气泡背景不透明度（百分比），对应原模块 content_preview_overlay_alpha。 */
+        const val AGENT_BUBBLE_OPACITY_PCT = "agent_bubble_opacity_pct"
+
         /** 全部布尔开关及其默认值。 */
         val BOOLEAN_DEFAULTS: Map<String, Boolean> = mapOf(
             POWER_KEY_TAKEOVER to false,
