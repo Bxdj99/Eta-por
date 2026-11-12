@@ -111,7 +111,9 @@ internal object BubbleHook {
             ) { chain ->
                 val result = chain.proceed()
                 runCatching {
-                    (chain.thisObject as? Application)?.let { attachHost(it) }
+                    val application = chain.thisObject as? Application
+                    if (application != null) attachHost(application)
+                    Unit
                 }.onFailure { logger.warn("BubbleHook host failed: ${it.javaClass.simpleName}") }
                 result
             }
@@ -140,7 +142,40 @@ internal object BubbleHook {
         } else {
             logger.warn("BubbleHook: NotificationListener.onNotificationPosted not found")
         }
+        // 状态栏滚动：拿到状态栏根视图，把滚动条塞进状态栏本身（对齐原模块 installStatusBarTickerHook）
+        val statusBarNames = listOf(
+            "com.oplus.systemui.statusbar.phone.OplusPhoneStatusBarView",
+            "com.android.systemui.statusbar.phone.PhoneStatusBarView",
+        )
+        var statusBarHooked = false
+        for (name in statusBarNames) {
+            val clazz = HookSupport.findClassOrNull(classLoader, name) ?: continue
+            val method = HookSupport.findMethod(clazz, "onFinishInflate") ?: continue
+            hooks.intercept(
+                id = "systemui.bubble-statusbar",
+                executable = method,
+                description = "PhoneStatusBarView.onFinishInflate → 记录状态栏根视图",
+            ) { chain ->
+                val result = chain.proceed()
+                runCatching {
+                    (chain.thisObject as? android.view.ViewGroup)?.let { root ->
+                        statusBarRoot = root
+                        logger.info("BubbleHook: status bar root captured ${root.javaClass.simpleName}")
+                    }
+                }
+                result
+            }
+            statusBarHooked = true
+            break
+        }
+        if (!statusBarHooked) {
+            logger.warn("BubbleHook: status bar view hook not installed")
+        }
     }
+
+    /** 状态栏根视图（hook 到就优先把滚动条放进状态栏，否则退回独立 overlay）。 */
+    @Volatile
+    private var statusBarRoot: android.view.ViewGroup? = null
 
     private fun attachHost(application: Application) {
         if (host != null) return
@@ -751,12 +786,37 @@ internal object BubbleHook {
     private var ticker: StatusTickerLayer? = null
     private var tickerParams: WindowManager.LayoutParams? = null
 
-    /** 状态栏滚动条：在状态栏高度位置叠一条半透明滚动字幕（对应 status_scroll）。 */
+    /** 状态栏滚动条：优先塞进状态栏本身（对齐原模块），拿不到根视图再退回独立 overlay。 */
     private fun showTicker(entry: Entry) {
         if (!cfgBool(Prefs.Keys.AGENT_BUBBLE_STATUS_SCROLL, true)) return
         val context = host ?: return
-        val manager = window ?: return
         val density = context.resources.displayMetrics.density
+        val rounds = cfgInt(Prefs.Keys.AGENT_BUBBLE_STATUS_ROUNDS, 2).coerceIn(1, 5)
+        val root = statusBarRoot
+        if (root != null) {
+            val manager = window
+            val screenWidth = manager?.currentWindowMetrics?.bounds?.width()
+                ?: context.resources.displayMetrics.widthPixels
+            val width = (screenWidth - (16 * density).toInt()).coerceAtLeast((160 * density).toInt())
+            val view = StatusTickerLayer(context, false)
+            val layoutParams = android.widget.FrameLayout.LayoutParams(width, (26 * density).toInt()).apply {
+                gravity = Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL
+            }
+            runCatching {
+                root.addView(view, layoutParams)
+                view.text = "${entry.title}：${entry.text}"
+                view.post {
+                    view.startScroll(rounds) {
+                        runCatching { root.removeView(view) }
+                    }
+                }
+                logger?.info("BubbleHook: ticker attached into status bar")
+                return
+            }.onFailure {
+                logger?.warn("BubbleHook ticker into status bar failed: ${it.javaClass.simpleName}")
+            }
+        }
+        val manager = window ?: return
         val metrics = manager.currentWindowMetrics
         val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
             android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
@@ -786,7 +846,6 @@ internal object BubbleHook {
         view.text = "${entry.title}：${entry.text}"
         view.translationX = 0f
         view.visibility = android.view.View.VISIBLE
-        val rounds = cfgInt(Prefs.Keys.AGENT_BUBBLE_STATUS_ROUNDS, 2).coerceIn(1, 5)
         val target = view
         target.post {
             target.startScroll(rounds) {
