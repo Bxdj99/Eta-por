@@ -61,6 +61,16 @@ internal class AgentLoop(
 
     private var availableToolNames = emptySet<String>()
     private val accumulatedReasoning = StringBuilder()
+
+    /** 当前回合已生成的正文增量，插队中止时用它把半截回复收尾。 */
+    private val streamedText = StringBuilder()
+
+    /** 当前正在流式输出的 text block 下标，用于中止时补发 BlockEnd 让 UI 收尾。 */
+    private var streamedTextIndex: Int = 0
+
+    private class SteeringInterrupt : RuntimeException(null, null, false, false)
+
+    private fun accumulatedStreamText(): String = streamedText.toString()
     private val sensitiveToolCallIds = linkedSetOf<String>()
     private val toolBatchLock = Any()
     private var pendingToolImageMessage: JSONObject? = null
@@ -129,6 +139,7 @@ internal class AgentLoop(
             var stepStartedAtMs = monotonicNowMs()
             var firstTokenAtMs: Long? = null
             val reasoningLengthBeforeRound = accumulatedReasoning.length
+            streamedText.setLength(0)
             val completedRound = try {
                 modelRetry.complete(
                     initialRound = round,
@@ -169,14 +180,72 @@ internal class AgentLoop(
                         ) {
                             accumulatedReasoning.append(providerEvent.delta)
                         }
+                        if (providerEvent is ProviderEvent.BlockDelta &&
+                            providerEvent.kind == AssistantBlockKind.TEXT
+                        ) {
+                            streamedText.append(providerEvent.delta)
+                            streamedTextIndex = providerEvent.index
+                        }
                         if (providerEvent !is ProviderEvent.Usage) {
                             providerEvent.toAgentEvent(attemptRound)?.let(onEvent)
+                        }
+                        // 插队即时接管：用户发话的瞬间就停掉当前这条流，
+                        // 已生成的半截内容保留，下一轮带着插话继续。
+                        // 以前只在 assistant 自然结束后才检查，表现就是「等上一问全答完才响应」。
+                        if (purpose.allowsTools &&
+                            providerEvent is ProviderEvent.BlockDelta &&
+                            providerEvent.kind == AssistantBlockKind.TEXT &&
+                            providerEvent.delta.isNotEmpty() &&
+                            runController.hasPendingSteering
+                        ) {
+                            throw SteeringInterrupt()
                         }
                     },
                     discardAttemptReasoning = { accumulatedReasoning.setLength(reasoningLengthBeforeRound) },
                 ).also { response ->
                     rejectContentFilter(response.response)
                     if (purpose == ProviderRequestPurpose.CHAT) validateChatResponse(response.response)
+                }
+            } catch (steer: SteeringInterrupt) {
+                // 插队即时接管：当前流被主动中止。把已生成的半截正文收成一条历史消息，
+                // 注入用户的插话，然后直接进下一轮——不再等这一轮自然说完。
+                val partial = accumulatedStreamText().trim()
+                // 主动中止的流不会再有 BlockEnd，必须补一条让 UI 把「正在输出」的转圈停掉，
+                // 否则那条气泡会一直显示流式中。
+                onEvent(
+                    AgentEvent.AssistantBlockEnd(
+                        round = round,
+                        kind = AgentEvent.AssistantBlockKind.TEXT,
+                        index = streamedTextIndex,
+                        contentChars = partial.length,
+                        replacementContent = partial.takeIf { it.isNotEmpty() },
+                    )
+                )
+                if (partial.isNotEmpty()) {
+                    appendMessage(
+                        AgentConversationCodec.assistantHistoryMessage(
+                            source = org.json.JSONObject().put("role", "assistant").put("content", partial),
+                            toolCalls = emptyList(),
+                        ).put("_eta_message_id", "assistant-$operationId-$round-partial")
+                    )
+                }
+                val supplement = runController.pollSteeringMessage()
+                if (supplement != null) {
+                    appendMessage(steeringMessage(supplement, partial))
+                    context.userAppended()
+                    turnMetrics.reset()
+                    round += 1
+                    continue
+                } else {
+                    // 队列被清空（用户撤回等）：没有可注入的内容，直接结束本 run，
+                    // 不再继续等这条被中止的流。
+                    publishTranscript()
+                    onEvent(AgentEvent.RunFinished(round = round, contentChars = partial.length))
+                    return Result(
+                        content = partial,
+                        reasoningContent = reasoningSnapshot(),
+                        sensitiveToolCallIds = sensitiveToolCallIds.toSet(),
+                    )
                 }
             } finally {
                 // 同一回合的重试仍需原始观察；整个回合结束后才移除截图。
@@ -247,7 +316,10 @@ internal class AgentLoop(
             publishTranscript()
 
             // assistant 已自然结束时再检查 steering。这样补充消息不会丢掉刚完成的回答。
-            if (purpose.allowsTools && appendPendingSteeringOrSeal()) {
+            // 把刚写完的正文传进去：续写提示词要靠它锚定语境，否则模型会当成新任务另起一段。
+            if (purpose.allowsTools &&
+                appendPendingSteeringOrSeal(assistantMessage.optString("content"))
+            ) {
                 round += 1
                 continue
             }
@@ -321,25 +393,57 @@ internal class AgentLoop(
 
     private fun appendPendingSteeringMessage(): Boolean {
         val supplement = runController.pollSteeringMessage() ?: return false
-        appendMessage(steeringMessage(supplement))
+        appendMessage(steeringMessage(supplement, lastAssistantContentFromTranscript()))
         context.userAppended()
         turnMetrics.reset()
         return true
     }
 
-    private fun appendPendingSteeringOrSeal(): Boolean {
+    /** 从现有 transcript 里取最后一条 assistant 正文，给续写提示词当语境锚点。 */
+    private fun lastAssistantContentFromTranscript(): String {
+        for (i in messages.length() - 1 downTo 0) {
+            val item = messages.optJSONObject(i) ?: continue
+            if (item.optString("role") != "assistant") continue
+            val text = item.optString("content").trim()
+            if (text.isNotEmpty() && text != "null") return text
+        }
+        return ""
+    }
+
+    private fun appendPendingSteeringOrSeal(lastAssistantText: String = ""): Boolean {
         val supplement = runController.pollSteeringOrSeal() ?: return false
-        appendMessage(steeringMessage(supplement))
+        appendMessage(steeringMessage(supplement, lastAssistantText))
         context.userAppended()
         turnMetrics.reset()
         return true
     }
 
-    private fun steeringPrompt(supplement: String): String =
-        "用户补充指令：$supplement\n\n请基于当前任务上下文继续执行，不要从头重复已经完成或已经验证过的操作。"
+    /**
+     * 插队续写的提示词。
+     *
+     * 关键：必须让模型知道这是「接着说」，不是「新开一个话题」。
+     * 之前的版本只写「请基于当前任务上下文继续执行，不要从头重复」，
+     * 模型收到的是一条孤立的 user 消息，很容易丢掉上文语境另起一段——
+     * 用户感受到的就是「插队之后把上面忘了」。
+     */
+    private fun steeringPrompt(supplement: String, lastAssistantText: String): String {
+        return buildString {
+            appendLine("用户在任务进行中插话了。这是对当前工作的新指令或补充，优先级最高。")
+            appendLine()
+            appendLine("【用户新指令】")
+            appendLine(supplement)
+            appendLine()
+            appendLine("【执行要求】")
+            appendLine("1. 立即按新指令调整方向并继续执行，把新要求融入当前任务，不要等；")
+            appendLine("2. 之前已完成的工作、读取的信息、得出的结论全部保持有效，接着用，不要重做；")
+            appendLine("3. 如果新指令与之前的方向冲突，按新指令为准，一句话说明改了什么然后照做；")
+            appendLine("4. 正在输出中被截断的解释文字直接放弃，不要回头补写；")
+            appendLine("5. 不要复述指令，不要道歉，直接干活。")
+        }
+    }
 
-    private fun steeringMessage(supplement: String): JSONObject =
-        AgentConversationCodec.userTextMessage(steeringPrompt(supplement))
+    private fun steeringMessage(supplement: String, lastAssistantText: String = ""): JSONObject =
+        AgentConversationCodec.userTextMessage(steeringPrompt(supplement, lastAssistantText))
             .put("_eta_message_id", "user-$operationId-supplement-${++supplementIndex}")
 
     private fun executeToolBatch(
@@ -365,6 +469,33 @@ internal class AgentLoop(
         val outcomes = mutableListOf<ToolOutcome>()
         var index = 0
         while (index < toolCalls.size) {
+            // 工具间隙检查插队：正在跑的命令让它跑完，但同一批里排在后面的工具
+            // 先把用户新指令以工具结果的形式注入——模型在下一轮立刻看到并调整方向。
+            // 做项目时用户插话十有八九撞上长命令，只靠流式中断检测要等整批跑完。
+            if (index > 0 && runController.hasPendingSteering) {
+                val steer = runController.pollSteeringMessage()
+                if (steer != null) {
+                    outcomes += ToolOutcome(
+                        call = toolCalls[index - 1],
+                        result = AgentModelClient.ToolResult(
+                            content = org.json.JSONObject()
+                                .put("ok", true)
+                                .put("code", "USER_STEERING")
+                                .put("message",
+                                    "【用户在工具执行期间插话】$steer\n\n请在读取本条后立即按新指令调整方向继续，已完成的工作保持有效。")
+                                .toString(),
+                        ),
+                    )
+                    // 剩余未执行的工具调用一并带回去，让模型决定是否还要跑。
+                    for (remaining in toolCalls.subList(index, toolCalls.size)) {
+                        outcomes += rejectedToolOutcome(
+                            round, remaining, "DEFERRED_BY_STEERING",
+                            "用户插话优先，本调用暂缓；请结合新指令决定是否重新提交。",
+                        )
+                    }
+                    return outcomes
+                }
+            }
             val current = toolCalls[index]
             if (current.name == AgentSubagentToolCatalog.TOOL_NAME && current.name in availableToolNames) {
                 val parallelBatch = mutableListOf<AgentModelClient.ToolCall>()

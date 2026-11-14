@@ -134,15 +134,56 @@ internal object AgentPendingResultRecovery {
             val id = supplementMessageId(runId, supplement.index)
             if (updated.any { it.id == id }) return@forEach
             val userMessage = UserMessageUi(id = id, content = supplement.text)
-            val assistantIndex = updated.indexOfLast {
-                it is AgentMessageUi &&
-                    it.isAssistantForRun(runId) &&
-                    (beforeLatestAssistant || it.isStreaming)
+
+            // 插队消息要落在「用户此刻看到的最后一行」之后。
+            // 判断依据不能只看 isStreaming：UserSupplementReceived 到达 UI 的时机
+            // 可能早于该轮的第一个 text delta（那时消息还不是 streaming 态），
+            // 那样会退化到「整条追加到末尾」，插话就永远落在上一段回复之后。
+            // 改为：只要这是本 run 的最后一条 assistant 消息，且这个 run 还没结束，
+            // 就把它就地切开。
+            val lastAssistantIndex = updated.indexOfLast {
+                it is AgentMessageUi && it.isAssistantForRun(runId)
             }
-            updated = if (assistantIndex >= 0) {
-                updated.toMutableList().also { it.add(assistantIndex, userMessage) }
+            val isTail = lastAssistantIndex == updated.indexOfLast { it is AgentMessageUi }
+            val shouldSplit = lastAssistantIndex >= 0 && isTail && (
+                (updated[lastAssistantIndex] as AgentMessageUi).isStreaming || !beforeLatestAssistant
+            )
+            updated = if (shouldSplit) {
+                val live = updated[lastAssistantIndex] as AgentMessageUi
+                val hasContent = live.content.isNotBlank()
+                // 不能沿用 assistant-<run>-<round>-<index> 前缀：isAssistantMessageForRound
+                // 用 startsWith("<prefix><round>-") 判断，加后缀仍会被当成本 round 的消息，
+                // 导致收尾/替换同时打到两段上。改用独立命名空间。
+                val headId = "supplement-split-$id"
+                val head = live.copy(id = headId, isStreaming = false)
+                val tail = live.copy(
+                    content = "",
+                    isStreaming = hasContent,
+                    usage = null,
+                )
+                val list = updated.toMutableList()
+                // 有内容才保留前半段；空消息直接替换掉，避免留下空气泡。
+                // 只有这一轮还在写（isStreaming）时才补 tail 承接后续增量，
+                // 否则会留一个永远空着的消息。
+                val keepTail = live.isStreaming
+                if (hasContent) {
+                    list[lastAssistantIndex] = head
+                    list.add(lastAssistantIndex + 1, userMessage)
+                    if (keepTail) list.add(lastAssistantIndex + 2, tail)
+                } else {
+                    list[lastAssistantIndex] = userMessage
+                    if (keepTail) list.add(lastAssistantIndex + 1, tail)
+                }
+                list
             } else {
-                updated + userMessage
+                val assistantIndex = updated.indexOfLast {
+                    it is AgentMessageUi && it.isAssistantForRun(runId) && beforeLatestAssistant
+                }
+                if (assistantIndex >= 0) {
+                    updated.toMutableList().also { it.add(assistantIndex, userMessage) }
+                } else {
+                    updated + userMessage
+                }
             }
         }
         return updated
