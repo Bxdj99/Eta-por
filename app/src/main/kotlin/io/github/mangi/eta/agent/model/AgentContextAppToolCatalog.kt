@@ -5,6 +5,73 @@ import org.json.JSONObject
 
 /** 上下文、应用入口与屏幕观察工具 schema。 */
 internal object AgentContextAppToolCatalog {
+    /** 用户裁决卡：不确定时让用户选，不要自己猜。 */
+    fun appendAskUser(tools: JSONArray) {
+        tools.put(
+            AgentToolSchema.function(
+                name = "ask_user",
+                description = "不确定时向用户弹出提示卡让他选择，并把他的选择回灌到本轮对话。" +
+                    "适用场景：两个信息来源矛盾、关键参数拿不准（比如键名/版本/数量）、操作有歧义、" +
+                    "或下一步的走法需要用户拍板（比如「继续修改」还是「保持现状」）。" +
+                    "必须给至少两个可区分的选项；用户选择后他的答案会以消息形式回来，按它继续，不要重复提问。",
+                parameters = JSONObject()
+                    .put("type", "object")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put(
+                                "question",
+                                JSONObject()
+                                    .put("type", "string")
+                                    .put("maxLength", 60)
+                                    .put("description", "一句话问题，显示在卡片的标题位置。"),
+                            )
+                            .put(
+                                "body",
+                                JSONObject()
+                                    .put("type", "string")
+                                    .put("maxLength", 500)
+                                    .put("description", "背景说明：为什么不确定、两个来源各说了什么。用户看得懂才答得对。"),
+                            )
+                            .put(
+                                "options",
+                                JSONObject()
+                                    .put("type", "array")
+                                    .put("minItems", 2)
+                                    .put("maxItems", 6)
+                                    .put(
+                                        "items",
+                                        JSONObject()
+                                            .put("type", "object")
+                                            .put(
+                                                "properties",
+                                                JSONObject()
+                                                    .put(
+                                                        "label",
+                                                        JSONObject()
+                                                            .put("type", "string")
+                                                            .put("maxLength", 24)
+                                                            .put("description", "选项显示文字，如「按 144 处理」/「按 60 处理」/「我自己去看」。"),
+                                                    )
+                                                    .put(
+                                                        "description",
+                                                        JSONObject()
+                                                            .put("type", "string")
+                                                            .put("maxLength", 100)
+                                                            .put("description", "可选：这个选项的含义或后果。"),
+                                                    ),
+                                            )
+                                            .put("required", JSONArray().put("label"))
+                                            .put("additionalProperties", false),
+                                    ),
+                            ),
+                    )
+                    .put("required", JSONArray().put("question").put("options"))
+                    .put("additionalProperties", false),
+            ),
+        )
+    }
+
     fun appendTo(tools: JSONArray) {
         tools
             .put(

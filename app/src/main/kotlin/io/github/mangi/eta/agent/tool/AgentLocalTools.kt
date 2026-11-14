@@ -246,6 +246,7 @@ internal class AgentLocalTools(
                 in ConversationCategoryTools.names ->
                     AgentModelClient.ToolResult(ConversationCategoryTools(context).execute(toolCall.name, args), sensitive = true)
                 "get_current_context" -> textResult(DeviceContextTool.current(context))
+                "ask_user" -> textResult(askUser(args, toolCall))
                 "search_apps" -> textResult(searchApps(args))
                 "launch_app" -> {
                     publishedObservation.set(PublishedObservation())
@@ -404,6 +405,55 @@ internal class AgentLocalTools(
             content = errorResult("MEMORY_DISABLED", "记忆已在设置中关闭"),
             sensitive = true,
         )
+    }
+
+    /**
+     * 用户裁决卡：两个来源矛盾、关键参数拿不准时，把选择权交给用户。
+     *
+     * 为什么必须存在：上一版把「不确定」交给模型自己判断，结果它按单份取证就宣布了
+     * 「帧率是 60」（实际 144）。这张卡就是「不确定」的出口：模型把问题和选项交上来，
+     * 框架弹卡，用户选完答案以消息形式回灌，模型接着跑。
+     */
+    private fun askUser(args: JSONObject, toolCall: AgentModelClient.ToolCall): String = try {
+        val question = args.optString("question").trim()
+        val body = args.optString("body").trim()
+        val optionsJson = args.optJSONArray("options") ?: org.json.JSONArray()
+        val options = buildList {
+            for (index in 0 until optionsJson.length()) {
+                val item = optionsJson.optJSONObject(index) ?: continue
+                val label = item.optString("label").trim()
+                if (label.isNotBlank()) {
+                    add(
+                        io.github.mangi.eta.agent.display.dashboard.PromptOption(
+                            id = "opt-$index",
+                            label = label,
+                            description = item.optString("description").trim(),
+                        ),
+                    )
+                }
+            }
+        }
+        if (question.isBlank() || options.size < 2) {
+            JSONObject()
+                .put("ok", false)
+                .put("code", "INVALID_ASK")
+                .put("message", "ask_user 需要一句问题和至少两个带 label 的选项。")
+                .toString()
+        } else {
+            io.github.mangi.eta.agent.display.dashboard.AgentConfirmGuard.ask(
+                context = context,
+                question = question,
+                body = body,
+                options = options,
+                runId = browserRunId,
+            )
+        }
+    } catch (error: Exception) {
+        JSONObject()
+            .put("ok", false)
+            .put("code", "ASK_FAILED")
+            .put("message", error.message ?: "提示卡发送失败")
+            .toString()
     }
 
     /** 记忆细节区：list / read / write / delete，正文落在 files/memory/details。 */

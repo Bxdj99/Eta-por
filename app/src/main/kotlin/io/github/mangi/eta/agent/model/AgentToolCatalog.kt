@@ -22,6 +22,8 @@ internal object AgentToolCatalog {
     ): JSONArray =
         capabilities.project(JSONArray().also { tools ->
             AgentContextAppToolCatalog.appendTo(tools)
+            // ask_user 是用户裁决通道：来源冲突、拿不准的参数都走它，不放进开关集合。
+            AgentContextAppToolCatalog.appendAskUser(tools)
             AgentGestureToolCatalog.appendTo(tools)
             AgentTextSystemToolCatalog.appendTo(tools)
             AgentDeviceToolCatalog.appendTo(
