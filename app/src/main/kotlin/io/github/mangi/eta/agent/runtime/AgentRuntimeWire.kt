@@ -80,9 +80,9 @@ internal object AgentRuntimeWire {
 
     /** client -> service：重新订阅指定 run 的安全事件重放、实时事件和最终结果。 */
     const val MSG_ATTACH_RUN = 11
-    const val MSG_PAUSE = 16
-    const val MSG_RESUME = 17
-    const val MSG_STEER = 18
+    const val MSG_PAUSE = 20
+    const val MSG_RESUME = 21
+    const val MSG_STEER = 22
     const val KEY_CONVERSATION_ID: String = "conversation_id"
     const val KEY_SUBAGENT_ID: String = "subagent_id"
 

@@ -301,6 +301,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 }
 
                 AgentRuntimeWire.MSG_PAUSE -> {
+                    io.github.mangi.eta.core.EtaTrace.log("interrupt.wire", "pause received")
                     requestPause(msg.data?.let(AgentRuntimeWire::runIdFromBundle)?.takeIf { it.isNotBlank() })
                 }
 
@@ -312,6 +313,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     val text = msg.data?.getString(AgentRuntimeWire.KEY_PROMPT).orEmpty()
                     val conversationId = msg.data?.getString(AgentRuntimeWire.KEY_CONVERSATION_ID).orEmpty()
                     val subagentId = msg.data?.getString(AgentRuntimeWire.KEY_SUBAGENT_ID).orEmpty()
+                    io.github.mangi.eta.core.EtaTrace.log(
+                        "interrupt.wire",
+                        "steer received chars=${text.length} conv=$conversationId sub=$subagentId " +
+                            "hasReplyTo=${msg.replyTo != null}",
+                    )
                     val delivered = if (subagentId.isNotBlank()) {
                         // 定向给正在跑的子智能体：投它自己的 childController，不进主线补充队列
                         val ok = io.github.mangi.eta.agent.subagent.SubagentSteerRegistry
