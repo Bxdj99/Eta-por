@@ -161,7 +161,7 @@ internal class AgentRuntimeClient(
      * 返回 true = 已进当前 run 的补充队列（下一回合生效，不取消当前请求）；
      * false = run 不在可插话状态（已在收尾/密封），调用方应回落硬取消+排队。
      */
-    fun steerRunChecked(text: String, conversationId: String = ""): Boolean {
+    fun steerRunChecked(text: String, conversationId: String = "", runId: String = ""): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
         return withRuntimeMessenger(false) { serviceMessenger ->
@@ -178,6 +178,8 @@ internal class AgentRuntimeClient(
             msg.data = Bundle().apply {
                 putString(AgentRuntimeWire.KEY_PROMPT, trimmed)
                 putString(AgentRuntimeWire.KEY_CONVERSATION_ID, conversationId)
+                // 显式目标 run：Service 侧据此取 run，不再依赖 displayedRun。
+                if (runId.isNotBlank()) AgentRuntimeWire.putRunId(this, runId)
             }
             msg.replyTo = Messenger(receiver)
             serviceMessenger.send(msg)

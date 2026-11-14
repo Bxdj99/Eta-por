@@ -641,6 +641,11 @@ internal object AgentRuntimeWire {
         putString(KEY_RUN_ID, runId)
     }
 
+    /** 显式指定 run 的消息（插队等）复用同一 KEY_RUN_ID，Service 侧用 [runIdFromBundle] 读。 */
+    fun putRunId(bundle: Bundle, runId: String) {
+        bundle.putString(KEY_RUN_ID, runId)
+    }
+
     fun activeRunsToBundle(runs: List<ActiveRunSnapshot>): Bundle = Bundle().apply {
         putParcelableArrayList("active_runs", ArrayList(runs.map { run ->
             Bundle().apply {

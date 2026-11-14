@@ -946,7 +946,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun requestSupplement(runId: String?, text: String): AgentEvent.UserSupplementReceived? {
         val supplementText = text.trim()
         if (supplementText.isBlank()) return null
-        val run = displayedRun?.takeIf { it.runId == runId } ?: return null
+        // displayedRun 是「当前 UI 展示的那个 run」，插队目标未必等于它；
+        // 一律以显式 runId 为准去 runs 里取，避免目标 run 因为不是 displayed 而被当成失败回落硬取消。
+        val run = (runId?.takeIf { it.isNotBlank() }?.let { runs.get(it) }) ?: displayedRun ?: return null
         if (guiControl.state.value.userPaused && guiControl.state.value.ownerRunId == null) return null
         setCapsuleInputMode(focusable = false)
         runs.get(run.runId)?.let { active ->
@@ -963,7 +965,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     "Agent runtime supplement received: index=${event.index}, chars=${event.text.length}"
                 )
                 active.overlayState = active.overlayState.applyEvent(event)
-                state.value = active.overlayState
+                if (displayedRun === active) state.value = active.overlayState
+                io.github.mangi.eta.core.EtaTrace.log(
+                    "interrupt.supplement",
+                    "runId=${active.runId} index=${event.index} accepted=true",
+                )
                 return event
             }
         }

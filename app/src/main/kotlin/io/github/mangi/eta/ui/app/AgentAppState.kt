@@ -1230,7 +1230,13 @@ internal class AgentAppState(
             // 插队优先走软通道：把内容作为 supplement 注入当前 run 的下一个回合，
             // 模型拿到新消息立刻继续思考，当前回合不被取消，已产出的一半回答也保得住。
             // 软通道失败（run 不在 OP_CHAT / 已在收尾密封）才回落硬取消+排队，保证总能出去。
-            if (trySteerActiveRun(promoted.content)) {
+            val activeRun = runStore.activeRunId(selectedConversationId)
+            val steered = trySteerActiveRun(promoted.content)
+            io.github.mangi.eta.core.EtaTrace.log(
+                "interrupt.steer",
+                "runId=${activeRun.orEmpty()} soft=$steered picking=${if (steered) "soft" else "hard-cancel"}",
+            )
+            if (steered) {
                 removeQueuedMessage(id)
             } else {
                 requestInterruptCurrentRun()
@@ -1247,7 +1253,8 @@ internal class AgentAppState(
     private fun trySteerActiveRun(text: String): Boolean {
         val runId = runStore.activeRunId(selectedConversationId) ?: return false
         val result = runCatching {
-            AgentRuntimeClient(appContext, AndroidAgentLogger).steerRunChecked(text, conversationIdForRun(runId) ?: "")
+            AgentRuntimeClient(appContext, AndroidAgentLogger)
+                .steerRunChecked(text, conversationIdForRun(runId) ?: "", runId)
         }.getOrNull() ?: return false
         return result
     }
