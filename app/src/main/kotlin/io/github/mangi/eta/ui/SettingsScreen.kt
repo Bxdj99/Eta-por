@@ -1548,6 +1548,18 @@ private fun SelectPref(
     val enabled = Prefs.localAgentPreferences() != null
     var current by remember(key) { mutableStateOf(Prefs.getAgentInt(key, default)) }
     var expanded by remember(key) { mutableStateOf(false) }
+    // 外部（root/其它进程）改了同一个键时同步 UI：
+    // SharedPreferences 只在进程首次加载时读盘，之后用内存副本——
+    // 实测出现过"文件已是 60，UI 还显示 144"的分裂（monkey 拉起与 sed 的 2 秒竞态）。
+    // 监听器只对同一进程内的写入生效；跨进程改动仍需进程重启，这是 Android 的边界。
+    val prefs = Prefs.localAgentPreferences()
+    DisposableEffect(key) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, changedKey ->
+            if (changedKey == key) current = changed.getInt(key, default)
+        }
+        prefs?.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs?.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     val select: (Int) -> Unit = { value ->
         if (Prefs.setAgentInt(key, value)) current = value
         expanded = false

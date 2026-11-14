@@ -302,7 +302,16 @@ internal class AgentLocalTools(
                 "read_image" -> fileVisionTool { imageTools.readImage(args) }
                 in AgentTerminalToolCatalog.names -> textResult(terminalTool {
                     if (toolCall.name == "terminal" && args.optString("action").equals("check_root", ignoreCase = true)) checkRoot()
-                    else terminalController.executeTool(toolCall.name, args)
+                    else {
+                        // 自杀型操作拦截：会杀掉宿主进程（也就会杀掉正在跑的会话）或改宿主
+                        // 自身配置的命令，不管模型自评可控与否，都先问用户。
+                        // 病例：11-14 的 run 写脚本 force-stop eta 改 prefs 再用启动器拉起，
+                        // 与 sed 差 2 秒竞态，进程带着旧值活了 4 小时。
+                        suicidalTerminalCommand(args)?.let { guard ->
+                            textResult(guard).content.let { return@terminalTool it }
+                        }
+                        terminalController.executeTool(toolCall.name, args)
+                    }
                 })
                 in AgentFileToolCatalog.names -> textResult(terminalTool { terminalController.fileTool(toolCall.name, args) })
                 "memory_get" -> textResult(memoryGet(args))
@@ -405,6 +414,42 @@ internal class AgentLocalTools(
             content = errorResult("MEMORY_DISABLED", "记忆已在设置中关闭"),
             sensitive = true,
         )
+    }
+
+    /**
+     * 识别会杀掉宿主进程（= 正在跑的会话）或直接改宿主自身持久配置的命令。
+     *
+     * 返回 null 放行；返回错误回执字符串则拦下并提示走 ask_user 或应用内 UI。
+     * 只拦 terminal/terminal_job 的 exec/start 路径；改自家 UI 能解决的设置不该走文件。
+     */
+    private fun suicidalTerminalCommand(args: JSONObject): String? {
+        val action = args.optString("action").lowercase()
+        if (action !in setOf("", "exec", "start")) return null
+        val command = args.optString("command")
+        if (command.isBlank()) return null
+        val contextText = command + " " + args.optString("cwd")
+        val ownPackage = context.packageName
+        val killPattern = "am\\s+force-stop|pkill|killall|pm\\s+clear"
+        val killsSelf = Regex(killPattern).containsMatchIn(contextText) && contextText.contains(ownPackage)
+        val editsOwnPrefs = (contextText.contains("/shared_prefs/") || contextText.contains("/databases/")) &&
+            contextText.contains(ownPackage)
+        val restartsSelf = killsSelf && (contextText.contains("monkey") || contextText.contains("am start"))
+        if (!killsSelf && !editsOwnPrefs) return null
+        val consequence = when {
+            restartsSelf -> "杀掉正在运行的会话（本条 run 会被硬杀，回复丢失），再重启应用"
+            killsSelf -> "杀掉正在运行的会话；本条 run 会被硬杀，最终回复不会落库"
+            else -> "直接改宿主自己的配置文件；活着的进程读不到（SharedPreferences 只在进程启动时读盘），" +
+                "而且与重启之间存在竞态——实测出现过改完 2 秒竞态导致设置 4 小时显示旧值"
+        }
+        return JSONObject()
+            .put("ok", false)
+            .put("code", "SUICIDAL_COMMAND_BLOCKED")
+            .put(
+                "message",
+                "这条命令会" + consequence + "。改宿主自身设置请优先走应用内 UI（设置页已有对应入口），" +
+                    "或用 ask_user 让用户在「照做（接受会话中断）」和「改走 UI」之间选择。用户确认前不要执行。",
+            )
+            .toString()
     }
 
     /**
