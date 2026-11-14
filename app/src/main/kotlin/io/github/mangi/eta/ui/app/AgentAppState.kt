@@ -1227,10 +1227,29 @@ internal class AgentAppState(
         if (promoted == null) return
         updateCurrentConversation(nextState, updateTimestamp = false)
         if (nextState.isStreaming && !nextState.isCompacting) {
-            requestInterruptCurrentRun()
+            // 插队优先走软通道：把内容作为 supplement 注入当前 run 的下一个回合，
+            // 模型拿到新消息立刻继续思考，当前回合不被取消，已产出的一半回答也保得住。
+            // 软通道失败（run 不在 OP_CHAT / 已在收尾密封）才回落硬取消+排队，保证总能出去。
+            if (trySteerActiveRun(promoted.content)) {
+                removeQueuedMessage(id)
+            } else {
+                requestInterruptCurrentRun()
+            }
         } else if (!nextState.isStreaming) {
             dispatchQueuedMessage(selectedConversationId, promoted)
         }
+    }
+
+    /**
+     * 软插话：经 Runtime 的 supplement 通道把文本投给正在跑的 run。
+     * 返回 true 表示 run 已接收（会在当前工具批次结束后的下一回合作为用户消息出现）。
+     */
+    private fun trySteerActiveRun(text: String): Boolean {
+        val runId = runStore.activeRunId(selectedConversationId) ?: return false
+        val result = runCatching {
+            AgentRuntimeClient(appContext, AndroidAgentLogger).steerRunChecked(text, conversationIdForRun(runId) ?: "")
+        }.getOrNull() ?: return false
+        return result
     }
 
     fun recallQueuedMessage(id: String, currentDraftText: String) {

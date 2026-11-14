@@ -153,15 +153,36 @@ internal class AgentRuntimeClient(
 
     /** 运行中插话：下一个 turn 生效，不取消当前请求。 */
     fun steerRun(text: String, conversationId: String = "") {
+        steerRunChecked(text, conversationId)
+    }
+
+    /**
+     * 带回执的插话：Service 会把「run 是否真的接收」回发到 replyTo。
+     * 返回 true = 已进当前 run 的补充队列（下一回合生效，不取消当前请求）；
+     * false = run 不在可插话状态（已在收尾/密封），调用方应回落硬取消+排队。
+     */
+    fun steerRunChecked(text: String, conversationId: String = ""): Boolean {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
-        withRuntimeMessenger(Unit) { serviceMessenger ->
+        if (trimmed.isEmpty()) return false
+        return withRuntimeMessenger(false) { serviceMessenger ->
+            // Messenger.send 是异步投递，回执走 reply messenger；这里用 CountDownLatch 同步等。
+            val latch = java.util.concurrent.CountDownLatch(1)
+            val delivered = java.util.concurrent.atomic.AtomicBoolean(false)
+            val receiver = object : android.os.Handler(Looper.getMainLooper()) {
+                override fun handleMessage(replyMsg: Message) {
+                    delivered.set(replyMsg.data?.getBoolean("steer_delivered") ?: false)
+                    latch.countDown()
+                }
+            }
             val msg = Message.obtain(null, AgentRuntimeWire.MSG_STEER)
             msg.data = Bundle().apply {
                 putString(AgentRuntimeWire.KEY_PROMPT, trimmed)
                 putString(AgentRuntimeWire.KEY_CONVERSATION_ID, conversationId)
             }
+            msg.replyTo = Messenger(receiver)
             serviceMessenger.send(msg)
+            latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+            delivered.get()
         }
     }
 

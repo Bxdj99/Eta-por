@@ -312,17 +312,27 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     val text = msg.data?.getString(AgentRuntimeWire.KEY_PROMPT).orEmpty()
                     val conversationId = msg.data?.getString(AgentRuntimeWire.KEY_CONVERSATION_ID).orEmpty()
                     val subagentId = msg.data?.getString(AgentRuntimeWire.KEY_SUBAGENT_ID).orEmpty()
-                    if (subagentId.isNotBlank()) {
+                    val delivered = if (subagentId.isNotBlank()) {
                         // 定向给正在跑的子智能体：投它自己的 childController，不进主线补充队列
-                        val delivered = io.github.mangi.eta.agent.subagent.SubagentSteerRegistry
+                        val ok = io.github.mangi.eta.agent.subagent.SubagentSteerRegistry
                             .steer(subagentId, text, conversationId)
                         io.github.mangi.eta.core.EtaTrace.log(
                             "subagent.steer",
-                            "subagent=$subagentId delivered=$delivered conv=$conversationId",
+                            "subagent=$subagentId delivered=$ok conv=$conversationId",
                         )
+                        ok
                     } else {
                         val runId = msg.data?.let(AgentRuntimeWire::runIdFromBundle)?.takeIf { it.isNotBlank() }
-                        requestSupplement(runId ?: displayedRun?.runId, text)
+                        requestSupplement(runId ?: displayedRun?.runId, text) != null
+                    }
+                    // 带了 replyTo 就回发投递结果：插队 UI 需要知道软通道是否成功，
+                    // 失败才回落硬取消。不带 replyTo 的旧调用方行为不变（fire-and-forget）。
+                    msg.replyTo?.let { reply ->
+                        runCatching {
+                            reply.send(Message.obtain().apply {
+                                data = android.os.Bundle().apply { putBoolean("steer_delivered", delivered) }
+                            })
+                        }
                     }
                 }
 
@@ -933,11 +943,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         guiControl.resumeForUser()
     }
 
-    private fun requestSupplement(runId: String?, text: String) {
+    private fun requestSupplement(runId: String?, text: String): AgentEvent.UserSupplementReceived? {
         val supplementText = text.trim()
-        if (supplementText.isBlank()) return
-        val run = displayedRun?.takeIf { it.runId == runId } ?: return
-        if (guiControl.state.value.userPaused && guiControl.state.value.ownerRunId == null) return
+        if (supplementText.isBlank()) return null
+        val run = displayedRun?.takeIf { it.runId == runId } ?: return null
+        if (guiControl.state.value.userPaused && guiControl.state.value.ownerRunId == null) return null
         setCapsuleInputMode(focusable = false)
         runs.get(run.runId)?.let { active ->
             val event = active.supplement(supplementText)
@@ -946,7 +956,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     state.value = state.value.copy(
                         status = AgentOverlayStatus.Finishing,
                     )
-                    return
+                    return null
                 }
             } else {
                 AndroidAgentLogger.info(
@@ -954,15 +964,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 )
                 active.overlayState = active.overlayState.applyEvent(event)
                 state.value = active.overlayState
-                return
+                return event
             }
         }
 
-        val completed = run.completedContext ?: return
+        // run 已经终结但保留了 completedContext：不是插话，走「补充续聊」——开一个新 run 继续。
+        val completed = run.completedContext ?: return null
         if (completed.request.operation != AgentRuntimeWire.OP_CHAT ||
             completed.request.handoff?.source != AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) {
             state.value = state.value.copy(status = AgentOverlayStatus.ContinuationUnavailable)
-            return
+            return null
         }
         val continuationRequest = AgentContinuationBuilder.build(
             request = completed.request,
@@ -970,6 +981,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             supplement = supplementText,
         )
         startRun(continuationRequest)
+        return null
     }
 
     private fun ensureOverlayVisible() {
