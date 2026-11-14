@@ -99,6 +99,10 @@ internal class AgentRuntimeSession(
             controller.steer(text)
         }
 
+    /** 是否还处在可以接收插话的阶段（RUNNING 且是普通对话）。只读判断，不投递。 */
+    val canAcceptSteer: Boolean
+        get() = lock.withLock { state == State.RUNNING && operation == AgentRuntimeWire.OP_CHAT }
+
     fun <T : AgentEvent> steer(
         text: String,
         eventFactory: () -> T,

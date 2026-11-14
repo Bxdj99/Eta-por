@@ -948,19 +948,28 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         if (supplementText.isBlank()) return null
         // displayedRun 是「当前 UI 展示的那个 run」，插队目标未必等于它；
         // 一律以显式 runId 为准去 runs 里取，避免目标 run 因为不是 displayed 而被当成失败回落硬取消。
-        val run = (runId?.takeIf { it.isNotBlank() }?.let { runs.get(it) }) ?: displayedRun ?: return null
-        if (guiControl.state.value.userPaused && guiControl.state.value.ownerRunId == null) return null
+        val run = (runId?.takeIf { it.isNotBlank() }?.let { runs.get(it) }) ?: displayedRun ?: run {
+            io.github.mangi.eta.core.EtaTrace.log(
+                "interrupt.supplement", "runId=${runId.orEmpty()} accepted=false reason=run_not_found",
+            )
+            return null
+        }
+        if (guiControl.state.value.userPaused && guiControl.state.value.ownerRunId == null) {
+            io.github.mangi.eta.core.EtaTrace.log(
+                "interrupt.supplement", "runId=${run.runId} accepted=false reason=user_paused",
+            )
+            return null
+        }
         setCapsuleInputMode(focusable = false)
         runs.get(run.runId)?.let { active ->
             val event = active.supplement(supplementText)
             if (event == null) {
-                if (!active.session.isTerminal) {
-                    state.value = state.value.copy(
-                        status = AgentOverlayStatus.Finishing,
-                    )
-                    return null
-                }
-            } else {
+                io.github.mangi.eta.core.EtaTrace.log(
+                    "interrupt.supplement",
+                    "runId=${active.runId} accepted=false reason=session_not_running terminal=${active.session.isTerminal}",
+                )
+            }
+            if (event != null) {
                 AndroidAgentLogger.info(
                     "Agent runtime supplement received: index=${event.index}, chars=${event.text.length}"
                 )
@@ -972,6 +981,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 )
                 return event
             }
+            // event == null：session 已不在 RUNNING（正在收尾/已终结）。
+            // 如果它还在跑（COMMITTING/尚未 TERMINAL），说明这一回合刚好收口，消息留给续聊接上；
+            // 若已 TERMINAL，同样走下面的续聊。两者都不应该回落成「硬取消」。
+            io.github.mangi.eta.core.EtaTrace.log(
+                "interrupt.supplement",
+                "runId=${active.runId} accepted=deferred can_steer=${active.session.canAcceptSteer}",
+            )
         }
 
         // run 已经终结但保留了 completedContext：不是插话，走「补充续聊」——开一个新 run 继续。
@@ -987,7 +1003,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             supplement = supplementText,
         )
         startRun(continuationRequest)
-        return null
+        // 续聊已接手：对上层报告"已受理"，避免调用方把它当成失败去硬取消上一个 run。
+        io.github.mangi.eta.core.EtaTrace.log(
+            "interrupt.supplement",
+            "runId=${run.runId} accepted=continuation newRunId=${continuationRequest.runId}",
+        )
+        return AgentEvent.UserSupplementReceived(-1, supplementText)
     }
 
     private fun ensureOverlayVisible() {
