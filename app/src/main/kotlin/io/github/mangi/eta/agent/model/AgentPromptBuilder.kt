@@ -115,6 +115,8 @@ internal object AgentPromptBuilder {
                     "单次回显不算通过，review 里的 single_evidence_numeric 就是提醒你补第二份。" +
                     "两个来源的取证结果矛盾、或关键参数（键名、版本、数量）拿不准时，不要猜、不要按看起来像的那个走：调用 ask_user，" +
                     "把两个来源各说了什么写进 body，给用户至少两个可区分的选项，他的选择会回灌到本轮对话；按它继续，不要重复提问。" +
+                    "修改宿主 Eta 自身的设置（灵屏分辨率、帧率、闲置时间、工具开关等）一律走应用内 UI：设置页→工具组有现成入口；" +
+                    "terminal 对这类文件操作会返回 SUICIDAL_COMMAND_BLOCKED——直接改宿主的 shared_prefs 或 files/datastore 属于竞态错误路径，活着的进程读不到，改了也白改。" +
                     "输入文本用 type_text：指定 index 可直接写入输入框，不必先点击；要搜索或发送时设 submit=true；中文、长文本直接传入，不要借助剪贴板；" +
                     "用户明确要求发送消息时，直接使用通用 GUI 工具完成输入和点击发送，不让用户手动完成，也不追加二次确认；" +
                     "成功的点击、滑动、type_text 与按键会在结果的 after 字段附带动作后的新界面（observation_id 与精简节点），" +
