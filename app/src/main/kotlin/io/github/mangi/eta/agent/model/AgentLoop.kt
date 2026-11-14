@@ -39,6 +39,13 @@ internal class AgentLoop(
     private val onTranscript: (List<AgentModelClient.ConversationMessage>) -> Unit = {},
     private val purpose: ProviderRequestPurpose = ProviderRequestPurpose.CHAT,
     private val roleplayContext: RoleplayRunContext? = null,
+    /**
+     * 收尾闸门：assistant 准备结束时框架先过一遍。
+     * 返回 null 放行；返回非 null 则把这段作为用户侧补充消息追回去，让模型再跑一轮（打回重做）。
+     * 重试上限由 [finalGateMaxRounds] 控制，防止闸门本身把会话顶死。
+     */
+    private val finalGate: (() -> String?)? = null,
+    private val finalGateMaxRounds: Int = 2,
     initialSupplementIndex: Int = 0,
 ) {
     data class Result(
@@ -64,6 +71,9 @@ internal class AgentLoop(
         roleplay = roleplayContext != null,
     )
     private var supplementIndex = initialSupplementIndex
+
+    /** 收尾闸门已打回的次数；超过上限后放行并在正文里如实标注。 */
+    private var gateAttempts = 0
 
     fun contextSnapshot(): AgentContextSnapshot? = context.snapshot()
 
@@ -248,6 +258,22 @@ internal class AgentLoop(
                 error("模型接口第 $round 轮返回为空${finishReason.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()}")
             }
 
+            // ── 收尾闸门：判断权收归框架 ──
+            // 模型说"做完了"不算数：先把台账过一遍，缺回执/单份取证的结论打回重做。
+            // 这是"从根上解决口头完成"的落点——模型不再自审，框架替它审。
+            if (purpose.allowsTools && finalGate != null && gateAttempts < finalGateMaxRounds) {
+                val rejection = runCatching { finalGate() }.getOrNull()
+                if (!rejection.isNullOrBlank()) {
+                    gateAttempts += 1
+                    appendMessage(
+                        AgentConversationCodec.userTextMessage(rejection)
+                            .put("_eta_message_id", "user-$operationId-gate-$gateAttempts"),
+                    )
+                    context.userAppended()
+                    round += 1
+                    continue
+                }
+            }
             publishTranscript()
             if (purpose.allowsTools) context.compact(final = true)
             onEvent(AgentEvent.RunFinished(round = round, contentChars = content.length))

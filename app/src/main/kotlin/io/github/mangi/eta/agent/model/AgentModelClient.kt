@@ -111,6 +111,8 @@ internal object AgentModelClient {
         rewriteReply: Boolean = false,
         assistantScreenContext: String = "",
         toolFilter: ((JSONArray) -> JSONArray)? = null,
+        /** 收尾闸门：null 放行；非 null 作为打回消息追回上下文，让模型补取证或改口。 */
+        finalGate: (() -> String?)? = null,
         onContextSnapshot: (AgentContextSnapshot) -> Unit = {},
         onTranscript: (List<ConversationMessage>) -> Unit = {},
         onEvent: (AgentEvent) -> Unit = {}
@@ -235,6 +237,7 @@ internal object AgentModelClient {
             roleplayContext = roleplayContext,
             initialSupplementIndex = initialSupplementIndex,
             toolsForRound = ::toolsForRound,
+            finalGate = finalGate,
         )
         val result = try {
             if (compactOnly) loop.compactOnly() else loop.run()
