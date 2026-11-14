@@ -40,13 +40,29 @@ internal object AgentLedger {
         evidence: String,
         tool: String = "",
         dedupeKey: String = "",
+        claimKey: String = "",
     ): Int = synchronized(this) {
-        val count = LedgerCore.record(file(context, taskId), taskId, step, status, evidence, tool, dedupeKey)
+        val count = LedgerCore.record(file(context, taskId), taskId, step, status, evidence, tool, dedupeKey, claimKey)
         EtaTrace.log(
             "ledger",
             "record task=${sanitize(taskId)} step=${step.take(40)} status=${LedgerCore.normalizeStatus(status, evidence)}",
         )
         count
+    }
+
+    /** 动手前登记一次外部副作用操作；返回 false 表示这个 claim_key 已经登记过（别再发一次）。 */
+    fun claim(
+        context: Context,
+        taskId: String,
+        claimKey: String,
+        step: String,
+        tool: String = "",
+    ): Pair<Boolean, Int> {
+        val result = synchronized(this) {
+            LedgerCore.claim(file(context, taskId), taskId, claimKey, step, tool)
+        }
+        EtaTrace.log("ledger", "claim task=${sanitize(taskId)} key=${claimKey.take(40)} accepted=${result.first}")
+        return result
     }
 
     fun read(context: Context, taskId: String): JSONObject = LedgerCore.readPayload(file(context, taskId))
@@ -64,6 +80,7 @@ internal class AgentTaskLedgerTools(private val context: Context) {
     fun execute(toolName: String, args: JSONObject): String = when (toolName) {
         "task_ledger" -> when (args.optString("action")) {
             "record" -> record(args)
+            "claim" -> claim(args)
             "review" -> AgentLedger.review(context, taskId(args)).toString()
             "read" -> AgentLedger.read(context, taskId(args)).toString()
             "clear" -> JSONObject().put("ok", AgentLedger.clear(context, taskId(args))).toString()
@@ -88,6 +105,7 @@ internal class AgentTaskLedgerTools(private val context: Context) {
         val evidence = args.optString("evidence").trim()
         // 没证据就不许记成 ok：这是台账存在的意义。
         val status = LedgerCore.normalizeStatus(args.optString("status"), evidence)
+        val claimKey = args.optString("claim_key").trim()
         val count = AgentLedger.record(
             context = context,
             taskId = taskId(args),
@@ -96,6 +114,7 @@ internal class AgentTaskLedgerTools(private val context: Context) {
             evidence = evidence,
             tool = args.optString("tool"),
             dedupeKey = args.optString("dedupe_key"),
+            claimKey = claimKey,
         )
         return JSONObject()
             .put("ok", true)
@@ -111,6 +130,43 @@ internal class AgentTaskLedgerTools(private val context: Context) {
                 },
             )
             .toString()
+    }
+
+    /**
+     * claim：动手前先登记。同一 claim_key 第二次进来直接返回 ALREADY_CLAIMED，
+     * 模型据此转去核实结果，而不是把同一个副作用再做一遍。
+     */
+    private fun claim(args: JSONObject): String {
+        val claimKey = args.optString("claim_key").trim()
+        if (claimKey.isBlank()) {
+            return JSONObject()
+                .put("ok", false)
+                .put("code", "CLAIM_KEY_REQUIRED")
+                .put("message", "claim 必须给 claim_key")
+                .toString()
+        }
+        val step = args.optString("step").trim().ifBlank { claimKey }
+        val (accepted, count) = AgentLedger.claim(
+            context = context,
+            taskId = taskId(args),
+            claimKey = claimKey,
+            step = step,
+            tool = args.optString("tool"),
+        )
+        return if (accepted) {
+            JSONObject()
+                .put("ok", true)
+                .put("claimed", true)
+                .put("entries", count)
+                .put("message", "已登记为进行中（unconfirmed）。做完用 confirm 带这个 claim_key 补取证。")
+                .toString()
+        } else {
+            JSONObject()
+                .put("ok", false)
+                .put("code", "ALREADY_CLAIMED")
+                .put("message", "这个动作已经登记过，不要再执行第二遍；先核实结果，要补证据用 action=confirm。")
+                .toString()
+        }
     }
 
     private fun taskId(args: JSONObject): String =

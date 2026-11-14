@@ -31,8 +31,20 @@ internal object AgentLedgerToolCatalog {
                                 "action",
                                 JSONObject()
                                     .put("type", "string")
-                                    .put("enum", JSONArray().put("record").put("review").put("read").put("clear"))
-                                    .put("description", "record 记一步；review 收尾自检；read 读全文；clear 清空当前台账。"),
+                                    .put("enum", JSONArray().put("record").put("claim").put("confirm").put("review").put("read").put("clear"))
+                                    .put(
+                                        "description",
+                                        "record 记一步；claim 在动手前登记一次操作（同一 claim_key 第二次调用会被拒绝，这是防重复执行的硬闸门）；" +
+                                            "confirm 用一个独立的 claim_key 为该条目补第二份取证（数值验收要求两次独立取证）；" +
+                                            "review 收尾自检；read 读全文；clear 清空当前台账。",
+                                    ),
+                            )
+                            .put(
+                                "claim_key",
+                                JSONObject()
+                                    .put("type", "string")
+                                    .put("maxLength", 120)
+                                    .put("description", "claim 必填：这次操作的唯一标识，例如 send-msg-42 或 install-por49。"),
                             )
                             .put(
                                 "task_id",

@@ -109,6 +109,10 @@ internal object AgentPromptBuilder {
                     "步骤超过五步或涉及写文件、装包、改系统设置、发消息、下单时，边做边用 task_ledger 记一条（带 evidence 和 dedupe_key），" +
                     "收尾前调用 task_ledger(action=\"review\")，按它决定哪些能在回答里说已完成、哪些只能说未确认；" +
                     "长时间任务中途回到任务时先读台账，不要凭印象续做。" +
+                    "有外部副作用的动作（发消息、下单、支付、装包、改系统设置）动手前先 task_ledger(action=\"claim\", claim_key=唯一标识)；" +
+                    "返回 ALREADY_CLAIMED 说明这个动作已经登记过，去核实结果，不要重做。做完用同一个 claim_key 的 confirm 记录回执。" +
+                    "凡是涉及数值、版本、数量、状态切换的验收，必须两份独立取证（例如 dumpsys 读版本 + 解包看 versionName，或两个不同字段交叉核对）；" +
+                    "单次回显不算通过，review 里的 single_evidence_numeric 就是提醒你补第二份。" +
                     "输入文本用 type_text：指定 index 可直接写入输入框，不必先点击；要搜索或发送时设 submit=true；中文、长文本直接传入，不要借助剪贴板；" +
                     "用户明确要求发送消息时，直接使用通用 GUI 工具完成输入和点击发送，不让用户手动完成，也不追加二次确认；" +
                     "成功的点击、滑动、type_text 与按键会在结果的 after 字段附带动作后的新界面（observation_id 与精简节点），" +
