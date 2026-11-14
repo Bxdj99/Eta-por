@@ -5,6 +5,7 @@ import io.github.mangi.eta.agent.accessibility.AgentAccessibilityKeeper
 import io.github.mangi.eta.agent.browser.BrowserSessionRegistry
 import io.github.mangi.eta.agent.model.AgentConversationCodec
 import io.github.mangi.eta.agent.model.AgentConversationToolCatalog
+import io.github.mangi.eta.agent.model.AgentLedgerToolCatalog
 import io.github.mangi.eta.agent.tool.ConversationHistoryTool
 import io.github.mangi.eta.data.db.EtaDatabase
 import io.github.mangi.eta.agent.model.AgentModelClient
@@ -27,6 +28,7 @@ import io.github.mangi.eta.agent.skill.SkillContext
 import io.github.mangi.eta.agent.skill.SkillRuntime
 import io.github.mangi.eta.agent.skill.PublicGitHubSkillSource
 import io.github.mangi.eta.agent.tool.AgentLocalTools
+import io.github.mangi.eta.agent.tool.AgentTaskLedgerTools
 import io.github.mangi.eta.agent.tool.AgentToolRequirements
 import io.github.mangi.eta.agent.tool.AgentToolCapabilities
 import io.github.mangi.eta.agent.tool.PendingSkillConflictCapabilityParser
@@ -288,6 +290,8 @@ internal class AgentRuntimeRunExecutor(
             )
             val runTools = JSONArray(mcpTools.toString()).also { tools ->
                 if (subagentAllowed()) AgentSubagentToolCatalog.appendSchemas(tools)
+                // 台账是框架级能力，与工具开关无关：只要还能调工具就该能落盘进度。
+                AgentLedgerToolCatalog.appendTo(tools)
                 if (historyTool != null) tools.put(AgentConversationToolCatalog.schema())
                 if (characterMemoryTools != null && memoryEnabled) {
                     val temp = JSONArray().also(CharacterMemoryTools::appendSchemas)
@@ -315,6 +319,10 @@ internal class AgentRuntimeRunExecutor(
                     } else {
                         subagentExecutor.execute(call.round, call)
                     }
+                } else if (call.name == AgentLedgerToolCatalog.TOOL_NAME) {
+                    AgentModelClient.ToolResult(AgentTaskLedgerTools(appContext).execute(call.name, runCatching {
+                        JSONObject(call.argumentsJson.ifBlank { "{}" })
+                    }.getOrElse { JSONObject() }))
                 } else if (call.name == AgentConversationToolCatalog.READ_HISTORY && historyTool != null) {
                     historyTool.execute(call)
                 } else if (call.name in CharacterMemoryTools.NAMES && characterMemoryTools != null) {

@@ -58,6 +58,7 @@ import io.github.mangi.eta.agent.terminal.SharedFolderMounts
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.AgentLogger
 import io.github.mangi.eta.core.HookSupport
+import io.github.mangi.eta.data.repository.AgentMemoryDetailStore
 import io.github.mangi.eta.data.repository.AgentMemoryException
 import io.github.mangi.eta.data.repository.AgentMemoryMutation
 import io.github.mangi.eta.data.repository.AgentMemoryRepository
@@ -305,6 +306,7 @@ internal class AgentLocalTools(
                 in AgentFileToolCatalog.names -> textResult(terminalTool { terminalController.fileTool(toolCall.name, args) })
                 "memory_get" -> textResult(memoryGet(args))
                 "memory_write" -> textResult(memoryWrite(args))
+                "memory_detail" -> textResult(memoryDetail(args))
                 "skills_list" -> textResult(skillsList(args))
                 "skills_read" -> textResult(skillsRead(args))
                 "skills_read_resource" -> textResult(skillsReadResource(args))
@@ -402,6 +404,78 @@ internal class AgentLocalTools(
             content = errorResult("MEMORY_DISABLED", "记忆已在设置中关闭"),
             sensitive = true,
         )
+    }
+
+    /** 记忆细节区：list / read / write / delete，正文落在 files/memory/details。 */
+    private fun memoryDetail(args: JSONObject): String = try {
+        val store = AgentMemoryDetailStore(context)
+        when (args.getString("action")) {
+            "list" -> {
+                val entries = store.list()
+                JSONObject()
+                    .put("ok", true)
+                    .put("count", entries.size)
+                    .put(
+                        "items",
+                        org.json.JSONArray().also { array ->
+                            entries.forEach { entry ->
+                                array.put(
+                                    JSONObject()
+                                        .put("name", entry.name)
+                                        .put("title", entry.title)
+                                        .put("bytes", entry.bytes)
+                                        .put("updated_at", entry.updatedAt),
+                                )
+                            }
+                        },
+                    )
+                    .put("hint", "细节区存放正文；核心记忆里应保留「详见 memory_detail:主题」的指针。")
+                    .toString()
+            }
+            "read" -> {
+                val name = args.optString("name").trim()
+                if (name.isBlank()) {
+                    JSONObject().put("ok", false).put("code", "NAME_REQUIRED").toString()
+                } else {
+                    val (text, truncated) = store.read(name, args.optInt("max_chars", AgentMemoryDetailStore.DEFAULT_READ_CHARS))
+                    if (text.isBlank()) {
+                        JSONObject()
+                            .put("ok", false)
+                            .put("code", "DETAIL_NOT_FOUND")
+                            .put("message", "细节区没有这个主题；先 action=list 看有哪些。")
+                            .toString()
+                    } else {
+                        JSONObject()
+                            .put("ok", true)
+                            .put("name", name)
+                            .put("content", text)
+                            .put("truncated", truncated)
+                            .toString()
+                    }
+                }
+            }
+            "write" -> {
+                val name = args.optString("name").trim()
+                val content = args.optString("content")
+                if (name.isBlank() || content.isBlank()) {
+                    JSONObject().put("ok", false).put("code", "NAME_AND_CONTENT_REQUIRED").toString()
+                } else {
+                    val bytes = store.write(name, args.optString("title"), content.take(20000))
+                    JSONObject()
+                        .put("ok", true)
+                        .put("name", name)
+                        .put("bytes", bytes)
+                        .put("message", "已写入细节区；记得在 MEMORY.md 核心区留一行「详见 memory_detail:$name」。")
+                        .toString()
+                }
+            }
+            "delete" -> JSONObject()
+                .put("ok", store.delete(args.optString("name")))
+                .toString()
+            else -> JSONObject().put("ok", false).put("code", "BAD_ACTION").toString()
+        }
+    } catch (error: Exception) {
+        JSONObject().put("ok", false).put("code", "MEMORY_DETAIL_FAILED").put("message", error.message).toString()
     }
 
     private fun memoryGet(args: JSONObject): String = try {
@@ -1861,7 +1935,7 @@ internal class AgentLocalTools(
         val DEVICE_TOOL_NAMES =
             DEVICE_DIRECT_TOOL_NAMES + DEVICE_SENSITIVE_READ_TOOL_NAMES +
                 DEVICE_SENSITIVE_ACTION_TOOL_NAMES
-        val MEMORY_TOOL_NAMES = setOf("memory_get", "memory_write")
+        val MEMORY_TOOL_NAMES = setOf("memory_get", "memory_write", "memory_detail")
     }
 }
 
