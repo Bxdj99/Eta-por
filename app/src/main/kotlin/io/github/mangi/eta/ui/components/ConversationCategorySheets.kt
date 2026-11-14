@@ -1,5 +1,7 @@
 package io.github.mangi.eta.ui.components
 
+import androidx.compose.foundation.layout.height
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -494,6 +496,65 @@ internal fun ConversationCategoryDeleteDialog(
                             text = confirmText,
                             onClick = onConfirm,
                             minWidth = 0.dp,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 分组批量清空确认：会真的删掉组内所有会话，必须二次确认。 */
+@Composable
+internal fun ConversationGroupClearDialog(
+    count: Int,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val title = stringResource(R.string.conversation_group_clear_confirm)
+    val message = stringResource(R.string.conversation_group_clear_action, count)
+    val confirmText = stringResource(R.string.action_delete)
+    val cancelText = stringResource(R.string.action_cancel)
+    when (LocalUiStyle.current) {
+        AppearanceUiStyle.COUI -> {
+            CouiConfirmDialog(
+                visible = true,
+                title = title,
+                message = message,
+                confirmText = confirmText,
+                destructive = true,
+                onConfirm = onConfirm,
+                onDismissRequest = onDismiss,
+            )
+        }
+        AppearanceUiStyle.MIUIX -> {
+            WindowDialog(
+                show = true,
+                cornerRadius = DialogDefaults.CornerRadius,
+                title = title,
+                onDismissRequest = onDismiss,
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = message,
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        TextButton(
+                            text = cancelText,
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            text = confirmText,
+                            onClick = onConfirm,
+                            colors = ButtonDefaults.textButtonColorsPrimary(),
                             modifier = Modifier.weight(1f),
                         )
                     }

@@ -81,7 +81,10 @@ internal abstract class EtaDatabase : RoomDatabase() {
                         override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) { createTextChunkCleanup(db) }
                         override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) { createTextChunkCleanup(db) }
                     })
-                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    // 绝不因迁移缺口清库：一次误删就是用户全部会话消失。
+                    // 迁移链 6→27 完整；更老的库或未知版本宁可启动失败并保留数据，
+                    // 也不 dropAllTables 静默清空。
+                    .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = false)
                     .build()
                     .also { instance = it }
             }

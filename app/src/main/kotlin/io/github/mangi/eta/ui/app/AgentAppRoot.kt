@@ -363,6 +363,7 @@ fun AgentAppRoot(
             onConversationDelete = { conversation ->
                 conversationDeleteTarget = conversation
             },
+            onConversationsClearGroup = { ids -> agentState.deleteConversations(ids) },
             onOpenTools = { pushRoute(AppRoute.Tools) },
             onOpenSkills = { pushRoute(AppRoute.Skills) },
             onOpenTasks = { pushRoute(AppRoute.Tasks) },

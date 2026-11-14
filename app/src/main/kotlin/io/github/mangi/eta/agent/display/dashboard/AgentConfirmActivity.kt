@@ -175,8 +175,9 @@ internal class AgentConfirmActivity : ComponentActivity() {
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SheetButton("取消", Color(0xFFFF6B6B), Modifier.weight(1f)) {
-                            // 拒绝 = 通过 steering 明确告诉 AI 停手，而不是只改本机状态机。
-                            AgentConfirmGuard.reject(applicationContext, token, conversation)
+                            // 拒绝 = 把「用户拒绝了」这条文案交给会话，AI 才知道要停手。
+                            val reply = AgentConfirmGuard.reject(applicationContext, token, conversation)
+                            reply?.let { deliverReplyToConversation(it, conversation) }
                             finish()
                         }
                         SheetButton("去接管", Color(0xFFB6BEC9), Modifier.weight(1f)) {
@@ -186,7 +187,8 @@ internal class AgentConfirmActivity : ComponentActivity() {
                         }
                         SheetButton("确认", Color(0xFF5FE08C), Modifier.weight(1f), filled = true) {
                             // 批准 = 发一个可执行的许可让 AI 继续；不重放旧坐标（快照可能已过期）。
-                            AgentConfirmGuard.approve(applicationContext, token, conversation)
+                            val reply = AgentConfirmGuard.approve(applicationContext, token, conversation)
+                            reply?.let { deliverReplyToConversation(it, conversation) }
                             finish()
                         }
                     }
@@ -194,6 +196,24 @@ internal class AgentConfirmActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * 把裁决结果作为一条用户消息交给该会话，由它开下一轮。
+     *
+     * 不能丢着不管：confirm 页只关掉卡片，模型那边就永远停在「等你确认」的状态。
+     * 走 AgentRuntimeClient.steerRun 是因为同步客户端禁止主线程，必须切工作线程。
+     */
+    private fun deliverReplyToConversation(reply: String, conversationId: String) {
+        if (reply.isBlank()) return
+        Thread {
+            runCatching {
+                io.github.mangi.eta.agent.runtime.AgentRuntimeClient(
+                    applicationContext,
+                    io.github.mangi.eta.core.AndroidAgentLogger,
+                ).steerRun(reply, conversationId)
+            }
+        }.start()
     }
 
     private fun loadBitmap(path: String): Bitmap? {

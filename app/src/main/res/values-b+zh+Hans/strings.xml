@@ -1448,4 +1448,9 @@
   <string name="conversation_category_delete_confirm">这个分类下的会话会回到「未分类」，会话本身不会删除。</string>
   <string name="conversation_move_category_create">新建分类并移入</string>
   <string name="conversation_move_category_name">分类名称</string>
+  <string name="conversation_group_batch">批量管理</string>
+  <string name="conversation_group_clear">清空本组</string>
+  <string name="conversation_group_clear_confirm">删除本组全部会话？</string>
+  <string name="conversation_group_clear_action">删除 %d 个会话</string>
+  <string name="conversation_group_selected">已选 %d 项</string>
 </resources>

@@ -1,5 +1,8 @@
 package io.github.mangi.eta.ui.screens.home
 
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
@@ -53,6 +56,7 @@ internal fun AgentHomeScreen(
                 LocalRoleplayChat provides state.roleplayChatUi(),
                 LocalAgentBrowserSession provides browser,
             ) {
+                androidx.compose.foundation.layout.Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
                 AgentChatBody(
                     messages = state.messages,
                     modelPickerState = modelPickerState,
@@ -105,6 +109,16 @@ internal fun AgentHomeScreen(
                     isDrawerOpen = isDrawerOpen,
                     modifier = modifier,
                 )
+                // 提问卡 / 审批卡：订阅 AgentConfirmGuard.pendings，叠在会话底部。
+                // 之前没有任何界面订阅它，用户点通知跳回来什么都看不到。
+                io.github.mangi.eta.ui.components.AgentAskCardHost(
+                    conversationKey = conversationKey,
+                    onSubmitReply = { reply -> onAction(AgentHomeAction.SubmitMessage(reply)) },
+                    modifier = androidx.compose.ui.Modifier
+                        .align(androidx.compose.ui.Alignment.BottomCenter)
+                        .padding(bottom = 96.dp),
+                )
+                }
             }
         }
     }

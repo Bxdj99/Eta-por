@@ -1115,6 +1115,63 @@ internal class AgentAppState(
         deleteSettledConversation(conversationId)
     }
 
+    /**
+     * 批量删除：侧边栏分组标题上的「清空本组」用。
+     *
+     * 正在跑的会话先请求停止并挂进 pendingConversationDeletes，由停止回调收尾删除；
+     * 其余一次性删掉。这里不逐个调 deleteSettledConversation——那个函数每次都重选会话、
+     * 刷新摘要、落盘，批量删几十条会触发几十次重建。
+     */
+    fun deleteConversations(conversationIds: Collection<String>) {
+        val targets = conversationIds.filter { it in conversationsById }
+        if (targets.isEmpty()) return
+        val busy = mutableListOf<String>()
+        val idle = mutableListOf<String>()
+        targets.forEach { id ->
+            val runId = runStore.activeRunId(id)
+            if (runId != null) {
+                pendingConversationDeletes.add(id)
+                stopRun(runId)
+                busy += id
+            } else {
+                idle += id
+            }
+        }
+        if (idle.isEmpty()) return
+        idle.forEach { BrowserSessionRegistry.requestRemove(it) }
+        val idleSet = idle.toSet()
+        val wasSelected = selectedConversationId in idleSet
+        conversationsById = conversationsById - idleSet
+        conversationTitles = conversationTitles - idleSet
+        conversationUpdatedAt = conversationUpdatedAt - idleSet
+        conversationPinnedIds = conversationPinnedIds - idleSet
+        if (wasSelected) {
+            conversationSelectionVersion += 1
+            cancelHistoryPageLoad()
+            conversationSelectionJob?.cancel()
+            isLoadingConversation = false
+            conversationLoadFailed = false
+            fileAttachmentOwnerVersion += 1
+            val nextId = conversationsById.keys.firstOrNull()
+            if (nextId != null) {
+                selectedConversationId = nextId
+                homeState = conversationsById.getValue(nextId)
+                selectConversation(nextId)
+            } else {
+                selectedConversationId = null
+                homeState = emptyChatState(defaultThinkingEnabled)
+                refreshConversationModel()
+            }
+        }
+        conversationPaneState = conversationPaneState.copy(selectedConversationId = selectedConversationId)
+        refreshConversationSummaries()
+        persistConversations()
+        io.github.mangi.eta.core.EtaTrace.log(
+            "conversation.batch_delete",
+            "deleted=${idle.size} pending=${busy.size}",
+        )
+    }
+
     private fun deleteSettledConversation(conversationId: String) {
         pendingConversationDeletes.remove(conversationId)
         BrowserSessionRegistry.requestRemove(conversationId)

@@ -440,18 +440,22 @@ internal object AgentConfirmGuard {
         return reply
     }
 
-    /** 兼容旧入口：批准。 */
-    fun approve(context: Context?, token: String, conversationId: String = "", remember: Boolean = false): Boolean {
-        if (mutablePendings.value.none { it.token == token }) return false
-        choose(context, token, if (remember) PromptOptionId.REMEMBER else PromptOptionId.APPROVE, conversationId)
-        return true
+    /**
+     * 兼容旧入口：批准。
+     *
+     * 返回回灌文案——调用方必须把它交给会话，否则模型永远不知道用户批了。
+     * 早先这里返回 Boolean 并把 choose() 的文案丢掉，审批类卡点了「确认」
+     * 也只是关掉卡片，AI 那边一句提示都没收到。
+     */
+    fun approve(context: Context?, token: String, conversationId: String = "", remember: Boolean = false): String? {
+        if (mutablePendings.value.none { it.token == token }) return null
+        return choose(context, token, if (remember) PromptOptionId.REMEMBER else PromptOptionId.APPROVE, conversationId)
     }
 
-    /** 兼容旧入口：拒绝。 */
-    fun reject(context: Context?, token: String, conversationId: String = ""): Boolean {
-        if (mutablePendings.value.none { it.token == token }) return false
-        choose(context, token, PromptOptionId.REJECT, conversationId)
-        return true
+    /** 兼容旧入口：拒绝。返回回灌文案，调用方负责交给会话。 */
+    fun reject(context: Context?, token: String, conversationId: String = ""): String? {
+        if (mutablePendings.value.none { it.token == token }) return null
+        return choose(context, token, PromptOptionId.REJECT, conversationId)
     }
 
     /**

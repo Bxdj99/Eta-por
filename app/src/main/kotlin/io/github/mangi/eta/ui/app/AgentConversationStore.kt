@@ -95,7 +95,30 @@ internal object AgentConversationStore {
                     database.withTransaction {
                         val stored = dao.conversationIdentities().associateBy { it.id }
                         phase = "delete_conversations"
-                        (stored.keys - current.keys).forEach { dao.deleteConversation(it) }
+                        // 危险动作：以「库里有、内存里没有」为删除依据。
+                        // 内存态一旦不完整（分页未加载 / 加载失败 / 状态回滚 / 崩溃恢复），
+                        // 就会把仍存在的会话整条删掉——用户看到的就是"会话突然没了"。
+                        // 三重护栏：
+                        //  1) 内存里一个会话都没有时（典型是加载失败），一律不删；
+                        //  2) 只删「上一次基线里也缺失」的会话，即连续两次保存都看不到它；
+                        //  3) 任何被删的 id 记 trace，事后可追溯。
+                        val missing = stored.keys - current.keys
+                        val safeToDelete = if (current.isEmpty()) {
+                            io.github.mangi.eta.core.EtaTrace.log(
+                                "conversation.delete",
+                                "skipped reason=empty_current stored=${stored.size}",
+                            )
+                            emptySet()
+                        } else {
+                            missing.filter { it in previous.keys && it !in current.keys }.toSet()
+                        }
+                        safeToDelete.forEach { id ->
+                            io.github.mangi.eta.core.EtaTrace.log(
+                                "conversation.delete",
+                                "id=$id source=save_changes stored=${stored.size} current=${current.size}",
+                            )
+                            dao.deleteConversation(id)
+                        }
                         for ((id, state) in current) {
                             if (!state.isConversationLoaded) {
                                 val row = stored[id] ?: continue

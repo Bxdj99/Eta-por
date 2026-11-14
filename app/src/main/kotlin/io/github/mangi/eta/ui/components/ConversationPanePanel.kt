@@ -1,5 +1,12 @@
 package io.github.mangi.eta.ui.components
 
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.TextButton
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import top.yukonga.miuix.kmp.basic.IconButton
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -153,6 +160,7 @@ internal fun ConversationPanePanel(
     onConversationRename: (ConversationSummaryUi) -> Unit,
     onConversationExport: (ConversationSummaryUi) -> Unit,
     onConversationDelete: (ConversationSummaryUi) -> Unit,
+    onConversationsClearGroup: (List<String>) -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenModelProviders: () -> Unit,
     onOpenTools: () -> Unit,
@@ -197,6 +205,10 @@ internal fun ConversationPanePanel(
     var manageTarget by remember { mutableStateOf<CategorySection?>(null) }
     var renameTarget by remember { mutableStateOf<CategorySection?>(null) }
     var deleteTarget by remember { mutableStateOf<CategorySection?>(null) }
+    // 多选模式：顶部「⋯」进入，逐条勾选后批量删除。
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var clearConfirm by remember { mutableStateOf(false) }
     val groups = remember(state.conversations, categorySections, categoryOf) {
         state.conversations.groupForDrawer(categorySections, categoryOf)
     }
@@ -252,6 +264,14 @@ internal fun ConversationPanePanel(
                                 onLongPress = (group.section as? ConversationDrawerSection.Category)?.let { category ->
                                     { manageTarget = CategorySection(category.id, category.name) }
                                 },
+                                onSelectGroup = { target ->
+                                    selectionMode = true
+                                    selectedIds = target.items.mapTo(mutableSetOf()) { it.id }
+                                },
+                                selectionMode = selectionMode,
+                                selectedCount = selectedIds.size,
+                                onExitSelection = { selectionMode = false; selectedIds = emptySet() },
+                                onDeleteSelected = { if (selectedIds.isNotEmpty()) clearConfirm = true },
                             )
                         }
                         items(
@@ -261,7 +281,19 @@ internal fun ConversationPanePanel(
                             ConversationTextRow(
                                 conversation = conversation,
                                 selected = conversation.id == state.selectedConversationId,
-                                onClick = { onConversationSelected(conversation.id) },
+                                selectionMode = selectionMode,
+                                checked = conversation.id in selectedIds,
+                                onClick = {
+                                    if (selectionMode) {
+                                        selectedIds = if (conversation.id in selectedIds) {
+                                            selectedIds - conversation.id
+                                        } else {
+                                            selectedIds + conversation.id
+                                        }
+                                    } else {
+                                        onConversationSelected(conversation.id)
+                                    }
+                                },
                                 onTogglePin = { onConversationTogglePin(conversation) },
                                 onRename = { onConversationRename(conversation) },
                                 onExport = { onConversationExport(conversation) },
@@ -422,6 +454,19 @@ internal fun ConversationPanePanel(
             onDismiss = { deleteTarget = null },
         )
     }
+
+    if (clearConfirm) {
+        ConversationGroupClearDialog(
+            count = selectedIds.size,
+            onConfirm = {
+                onConversationsClearGroup(selectedIds.toList())
+                clearConfirm = false
+                selectionMode = false
+                selectedIds = emptySet()
+            },
+            onDismiss = { clearConfirm = false },
+        )
+    }
 }
 
 /** 按名称取分类 id，没有就新建（同名不重复建，直接复用）。 */
@@ -502,48 +547,102 @@ private fun ConversationSectionHeader(
     group: ConversationDrawerGroup,
     isFirstSection: Boolean,
     onLongPress: (() -> Unit)? = null,
+    onSelectGroup: ((ConversationDrawerGroup) -> Unit)? = null,
+    selectionMode: Boolean = false,
+    selectedCount: Int = 0,
+    onExitSelection: () -> Unit = {},
+    onDeleteSelected: () -> Unit = {},
 ) {
     val hapticFeedback = LocalHapticFeedback.current
-    val title: @Composable () -> Unit = {
-        SmallTitle(
-            text = group.localizedLabel(),
-            insideMargin = PaddingValues(
-                start = ConversationPanelMetrics.RowHorizontalPadding,
-                top = if (isFirstSection) {
-                    ConversationPanelMetrics.FirstSectionTopPadding
+    val topPadding = if (isFirstSection) {
+        ConversationPanelMetrics.FirstSectionTopPadding
+    } else {
+        ConversationPanelMetrics.SectionTopPadding
+    }
+
+    // 多选态下，「今天」这行变成操作条：全选/退出 + 删除 N 项。
+    if (selectionMode) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = ConversationPanelMetrics.RowHorizontalPadding,
+                    top = topPadding,
+                    end = ConversationPanelMetrics.RowHorizontalPadding,
+                    bottom = ConversationPanelMetrics.SectionBottomPadding,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.conversation_group_selected, selectedCount),
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onExitSelection,
+            )
+            TextButton(
+                text = stringResource(R.string.action_delete),
+                onClick = onDeleteSelected,
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
+        return
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (onLongPress == null) {
+                    Modifier
                 } else {
-                    ConversationPanelMetrics.SectionTopPadding
+                    Modifier.combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongPress()
+                        },
+                    )
                 },
+            )
+            .padding(
+                start = ConversationPanelMetrics.RowHorizontalPadding,
+                top = topPadding,
                 end = ConversationPanelMetrics.RowHorizontalPadding,
                 bottom = ConversationPanelMetrics.SectionBottomPadding,
             ),
-        )
-    }
-    if (onLongPress == null) {
-        title()
-    } else {
-        // 分类标题长按 → 改名 / 删除；置顶与时间分组标题保持不可交互
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .combinedClickable(
-                    onClick = {},
-                    onLongClick = {
-                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onLongPress()
-                    },
-                ),
-        ) {
-            title()
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            SmallTitle(text = group.localizedLabel(), insideMargin = PaddingValues(0.dp))
+        }
+        // 分组右侧「⋯」：进入多选并预选本组，之后可逐条取消勾选。
+        if (onSelectGroup != null && group.items.isNotEmpty()) {
+            IconButton(
+                onClick = { onSelectGroup(group) },
+                modifier = Modifier.size(ConversationPanelMetrics.ActionIconSize + 8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Checklist,
+                    contentDescription = stringResource(R.string.conversation_group_batch),
+                    modifier = Modifier.size(ConversationPanelMetrics.ActionIconSize),
+                )
+            }
         }
     }
 }
+
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationTextRow(
     conversation: ConversationSummaryUi,
     selected: Boolean,
+    selectionMode: Boolean = false,
+    checked: Boolean = false,
     onClick: () -> Unit,
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
@@ -600,6 +699,17 @@ private fun ConversationTextRow(
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (selectionMode) {
+                Icon(
+                    imageVector = if (checked) Icons.Rounded.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                    contentDescription = null,
+                    tint = if (checked) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier
+                        .size(ConversationPanelMetrics.ActionIconSize)
+                        .padding(end = 4.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             conversation.characterName?.let { name ->
                 CharacterAvatar(
                     name = name,

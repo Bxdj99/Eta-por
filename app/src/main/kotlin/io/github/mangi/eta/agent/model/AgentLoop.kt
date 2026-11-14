@@ -209,6 +209,9 @@ internal class AgentLoop(
             } catch (steer: SteeringInterrupt) {
                 // 插队即时接管：当前流被主动中止。把已生成的半截正文收成一条历史消息，
                 // 注入用户的插话，然后直接进下一轮——不再等这一轮自然说完。
+                // 注意：thinking 半截内容不进 history（见 rejectContentFilter 的注释——
+                // 带截断签名块的续轮会被上游判为改动 thinking，同一会话每轮 400）。
+                accumulatedReasoning.setLength(reasoningLengthBeforeRound)
                 val partial = accumulatedStreamText().trim()
                 // 主动中止的流不会再有 BlockEnd，必须补一条让 UI 把「正在输出」的转圈停掉，
                 // 否则那条气泡会一直显示流式中。
@@ -237,15 +240,12 @@ internal class AgentLoop(
                     round += 1
                     continue
                 } else {
-                    // 队列被清空（用户撤回等）：没有可注入的内容，直接结束本 run，
-                    // 不再继续等这条被中止的流。
-                    publishTranscript()
-                    onEvent(AgentEvent.RunFinished(round = round, contentChars = partial.length))
-                    return Result(
-                        content = partial,
-                        reasoningContent = reasoningSnapshot(),
-                        sensitiveToolCallIds = sensitiveToolCallIds.toSet(),
-                    )
+                    // 队列被清空（用户撤回等）：流已被中止但无新指令可注入。
+                    // 不能提前 return（绕过 finalGate）、不能 break（while 外无收尾代码，
+                    // 且 completedRound 未赋值）。partial 已在上面 append 过，
+                    // 直接再起一轮正常请求，让既有收尾路径自然接管。
+                    round += 1
+                    continue
                 }
             } finally {
                 // 同一回合的重试仍需原始观察；整个回合结束后才移除截图。
@@ -475,8 +475,12 @@ internal class AgentLoop(
             if (index > 0 && runController.hasPendingSteering) {
                 val steer = runController.pollSteeringMessage()
                 if (steer != null) {
+                    // 注意绑定对象：toolCalls[index-1] 刚执行完、已有真实结果，
+                    // 再给它挂第二条结果会同 call 双结果，违反 tool_call↔result 一对一协议。
+                    // 用户指令要跟着「第一个被暂缓的调用」走，它们本来就没有结果。
+                    val deferredHead = toolCalls[index]
                     outcomes += ToolOutcome(
-                        call = toolCalls[index - 1],
+                        call = deferredHead,
                         result = AgentModelClient.ToolResult(
                             content = org.json.JSONObject()
                                 .put("ok", true)
@@ -486,8 +490,8 @@ internal class AgentLoop(
                                 .toString(),
                         ),
                     )
-                    // 剩余未执行的工具调用一并带回去，让模型决定是否还要跑。
-                    for (remaining in toolCalls.subList(index, toolCalls.size)) {
+                    // 其余未执行的工具调用一并带回去，让模型决定是否还要跑。
+                    for (remaining in toolCalls.subList(index + 1, toolCalls.size)) {
                         outcomes += rejectedToolOutcome(
                             round, remaining, "DEFERRED_BY_STEERING",
                             "用户插话优先，本调用暂缓；请结合新指令决定是否重新提交。",
