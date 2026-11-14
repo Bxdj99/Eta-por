@@ -86,8 +86,15 @@ internal object AgentRuntimeConnection {
     }
 
     fun acquire(context: Context, callLogger: AgentLogger): Lease? {
-        check(Looper.myLooper() != Looper.getMainLooper()) {
-            "Agent Runtime 同步客户端不能在主线程调用"
+        // 同步客户端会阻塞等待 Binder 连接（最坏 BIND_TIMEOUT 8 秒），禁止主线程调用。
+        // 以前这里用 check() 抛 IllegalStateException，调用方普遍 runCatching{}.getOrNull()，
+        // 异常被静默吞成 false/null，排查时完全看不到；改成明确的拒绝 + trace。
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            io.github.mangi.eta.core.EtaTrace.log(
+                "runtime.acquire",
+                "rejected=main_thread stack=${Throwable().stackTrace.take(4).joinToString("/") { it.methodName }}",
+            )
+            return null
         }
 
         val shouldBind: Boolean

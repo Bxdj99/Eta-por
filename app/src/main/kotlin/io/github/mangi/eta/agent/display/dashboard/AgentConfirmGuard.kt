@@ -577,12 +577,15 @@ internal object AgentConfirmGuard {
 
     private fun steer(context: Context?, text: String, conversationId: String) {
         val app = context?.applicationContext ?: return
-        runCatching {
-            AgentRuntimeClient(app, AndroidAgentLogger).steerRun(text, conversationId)
-        }.onFailure {
-            AndroidAgentLogger.warn("Confirm steer failed: ${it.message}")
-        }
-        EtaTrace.log("confirm.steer", text.take(60))
+        // Runtime 同步客户端禁止主线程（acquire 会 check 抛异常，最坏阻塞 8 秒）。
+        Thread {
+            runCatching {
+                AgentRuntimeClient(app, AndroidAgentLogger).steerRun(text, conversationId)
+            }.onFailure {
+                AndroidAgentLogger.warn("Confirm steer failed: ${it.message}")
+            }
+            EtaTrace.log("confirm.steer", text.take(60))
+        }.start()
     }
 
     /** 每张卡一个通知 id：多会话时不能互相覆盖。 */

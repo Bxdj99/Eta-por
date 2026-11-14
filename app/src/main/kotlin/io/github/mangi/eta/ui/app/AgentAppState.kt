@@ -1230,16 +1230,25 @@ internal class AgentAppState(
             // 插队优先走软通道：把内容作为 supplement 注入当前 run 的下一个回合，
             // 模型拿到新消息立刻继续思考，当前回合不被取消，已产出的一半回答也保得住。
             // 软通道失败（run 不在 OP_CHAT / 已在收尾密封）才回落硬取消+排队，保证总能出去。
+            //
+            // 必须离开主线程：AgentRuntimeClient 走 AgentRuntimeConnection.acquire()，
+            // 那里对主线程直接 check 抛异常（且最坏会阻塞 BIND_TIMEOUT 8 秒）。
+            // 本方法由点击事件在主线程同步调用，此前异常被 runCatching 吞掉 → steered 恒为 false
+            // → 每次插队都无条件回落硬取消，表现就是「一插话就停」。
             val activeRun = runStore.activeRunId(selectedConversationId)
-            val steered = trySteerActiveRun(promoted.content)
-            io.github.mangi.eta.core.EtaTrace.log(
-                "interrupt.steer",
-                "runId=${activeRun.orEmpty()} soft=$steered picking=${if (steered) "soft" else "hard-cancel"}",
-            )
-            if (steered) {
-                removeQueuedMessage(id)
-            } else {
-                requestInterruptCurrentRun()
+            scope.launch(Dispatchers.IO) {
+                val steered = trySteerActiveRun(promoted.content)
+                io.github.mangi.eta.core.EtaTrace.log(
+                    "interrupt.steer",
+                    "runId=${activeRun.orEmpty()} soft=$steered picking=${if (steered) "soft" else "hard-cancel"}",
+                )
+                withContext(Dispatchers.Main.immediate) {
+                    if (steered) {
+                        removeQueuedMessage(id)
+                    } else {
+                        requestInterruptCurrentRun()
+                    }
+                }
             }
         } else if (!nextState.isStreaming) {
             dispatchQueuedMessage(selectedConversationId, promoted)
@@ -1249,14 +1258,24 @@ internal class AgentAppState(
     /**
      * 软插话：经 Runtime 的 supplement 通道把文本投给正在跑的 run。
      * 返回 true 表示 run 已接收（会在当前工具批次结束后的下一回合作为用户消息出现）。
+     * 必须在工作线程调用（Runtime 同步客户端禁止主线程）。
      */
     private fun trySteerActiveRun(text: String): Boolean {
-        val runId = runStore.activeRunId(selectedConversationId) ?: return false
-        val result = runCatching {
+        val runId = runStore.activeRunId(selectedConversationId)
+        if (runId == null) {
+            io.github.mangi.eta.core.EtaTrace.log("interrupt.steer.fail", "reason=no_active_run")
+            return false
+        }
+        return runCatching {
             AgentRuntimeClient(appContext, AndroidAgentLogger)
                 .steerRunChecked(text, conversationIdForRun(runId) ?: "", runId)
-        }.getOrNull() ?: return false
-        return result
+        }.onFailure { throwable ->
+            // 以前这里的异常被静默吞掉，导致插队永远回落硬取消却查不出原因。
+            io.github.mangi.eta.core.EtaTrace.log(
+                "interrupt.steer.fail",
+                "runId=$runId type=${throwable.javaClass.simpleName} msg=${throwable.message}",
+            )
+        }.getOrNull() ?: false
     }
 
     fun recallQueuedMessage(id: String, currentDraftText: String) {

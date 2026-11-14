@@ -160,9 +160,15 @@ internal class AgentConfirmActivity : ComponentActivity() {
                             style = TextStyle(color = Color(0xFF7BD8FF), fontSize = 13.sp, fontWeight = FontWeight.Medium),
                             modifier = Modifier.clickable {
                                 if (steer.isNotBlank()) {
-                                    runCatching { AgentRuntimeClient(applicationContext, io.github.mangi.eta.core.AndroidAgentLogger)
-                                        .steerRun(steer, conversation) }
+                                    // Runtime 同步客户端禁止主线程，必须切到工作线程再发。
+                                    val text = steer
                                     steer = ""
+                                    Thread {
+                                        runCatching {
+                                            AgentRuntimeClient(applicationContext, io.github.mangi.eta.core.AndroidAgentLogger)
+                                                .steerRun(text, conversation)
+                                        }
+                                    }.start()
                                 }
                             }.padding(start = 10.dp),
                         )
