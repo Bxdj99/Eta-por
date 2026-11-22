@@ -24,6 +24,9 @@ internal object AgentToolCatalog {
             AgentContextAppToolCatalog.appendTo(tools)
             // ask_user 是用户裁决通道：来源冲突、拿不准的参数都走它，不放进开关集合。
             AgentContextAppToolCatalog.appendAskUser(tools)
+            // 进程内插件（issue #234）：作用域内应用直调内部能力
+            AgentContextAppToolCatalog.appendAppPluginCall(tools)
+            AgentContextAppToolCatalog.appendPluginEnroll(tools)
             AgentGestureToolCatalog.appendTo(tools)
             AgentTextSystemToolCatalog.appendTo(tools)
             AgentDeviceToolCatalog.appendTo(

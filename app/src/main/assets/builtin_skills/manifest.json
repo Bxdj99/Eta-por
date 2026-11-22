@@ -29,6 +29,16 @@
       "hasReferences": false,
       "hasAssets": false,
       "hasEvals": false
+    },
+    {
+      "id": "app-plugin-inject",
+      "name": "app-plugin-inject",
+      "description": "用 app_plugin_call 把代码注入目标应用进程内执行，直接调它的内部类与方法（搜索、读列表、调私有 API），替代慢且脆弱的截图点击。当应用没有公开接口、或界面操作不稳定时使用。含作用域配置、插件写法、Java 桥 API、常见失败对照表。",
+      "assetPath": "builtin_skills/app-plugin-inject",
+      "hasScripts": false,
+      "hasReferences": false,
+      "hasAssets": false,
+      "hasEvals": false
     }
   ]
 }

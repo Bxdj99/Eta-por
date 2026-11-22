@@ -57,6 +57,10 @@ internal object Prefs {
         const val AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD = "agent_virtual_display_dismiss_keyguard"
         const val AGENT_RUNTIME_CONFIG_JSON = "agent_runtime_config_json"
         const val AGENT_DISABLED_TOOLS_JSON = "agent_disabled_tools_json"
+        /** 进程内插件作用域：JSON 数组的包名列表，这些应用进程里会启动 AppPluginHost（issue #234）。 */
+        const val AGENT_PLUGIN_SCOPE_JSON = "agent_plugin_scope_json"
+        /** 进程内插件注入总开关：关闭后所有应用都不挂插件宿主，不动作用域配置。 */
+        const val AGENT_PLUGIN_ENABLED = "agent_plugin_enabled"
 
 
         /** 全部布尔开关及其默认值。 */
@@ -81,6 +85,7 @@ internal object Prefs {
             AGENT_VIRTUAL_DISPLAY_ENABLED to true,
             AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE to true,
             AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD to true,
+            AGENT_PLUGIN_ENABLED to true,
         )
 
         /** 由 Eta Runtime 最终裁决、不要求 Xposed 框架在线的开关。 */

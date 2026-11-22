@@ -56,16 +56,28 @@ internal data class AgentToolCapabilities(
 
     fun project(tools: JSONArray): JSONArray {
         val rootProjected = AgentToolRequirements.project(tools, rootAvailable)
+        val dropped = mutableListOf<String>()
         return JSONArray().also { visible ->
             for (index in 0 until rootProjected.length()) {
                 val tool = rootProjected.getJSONObject(index)
                 val name = tool.getJSONObject("function").getString("name")
-                if (unavailableCode(name) == null) {
+                val code = unavailableCode(name)
+                if (code != null) dropped += "$name:$code"
+                if (code == null) {
                     if (name in setOf("get_device_state", "set_device_state") && (!nfcAvailable || !nightLightAvailable)) {
                         val target = tool.getJSONObject("function").getJSONObject("parameters").getJSONObject("properties").getJSONObject("target")
                         target.put("enum", JSONArray(SystemStateControls.targets.filterNot { it == "nfc" && !nfcAvailable || it == "night_light" && !nightLightAvailable }))
                     }
                     visible.put(tool)
+                }
+            }
+            // 把被剔除的工具和原因落到 trace：以后「模型说没工具」能一眼看出是权限还是配置。
+            if (dropped.isNotEmpty() || tools.length() != visible.length()) {
+                runCatching {
+                    io.github.mangi.eta.core.EtaTrace.log(
+                        "tools.project",
+                        "in=${tools.length()} out=${visible.length()} dropped=${dropped.take(12)}",
+                    )
                 }
             }
         }

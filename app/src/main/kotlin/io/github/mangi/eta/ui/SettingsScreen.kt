@@ -1,5 +1,16 @@
 package io.github.mangi.eta.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.foundation.layout.Arrangement
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -196,6 +207,13 @@ private fun SettingsPageContent(
     var hasUsedSystemizer by remember { mutableStateOf(enhancementHistory.hasUsedSystemizer) }
     var showSystemizerDialog by remember { mutableStateOf(false) }
     var installingSystemizer by remember { mutableStateOf(false) }
+
+    // 进程内插件作用域（issue #234）：配置哪些应用允许注入代码。
+    var pluginScope by remember { mutableStateOf(io.github.mangi.eta.agent.plugin.PluginScopeStore.read()) }
+    var pluginScopeDialog by remember { mutableStateOf(false) }
+    var pluginScopeInput by remember { mutableStateOf("") }
+    // 已加入列表默认收起：278 个包名全平铺既丑又让对话框划不动
+    var pluginScopeJoinedExpanded by remember { mutableStateOf(false) }
 
     // 悬浮窗权限状态：授权后从系统设置返回时（ON_RESUME）刷新。
     var overlayGranted by remember {
@@ -488,7 +506,7 @@ private fun SettingsPageContent(
                     SwitchPref(
                         context = context,
                         prefs = agentPrefs,
-                        title = "灵屏使用期间点亮屏幕",
+                        title = "虚拟屏使用期间点亮屏幕",
                         key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE,
                         icon = Icons.Rounded.LightMode,
                         iconTint = SettingsIconColors.Orange,
@@ -497,14 +515,14 @@ private fun SettingsPageContent(
                     SwitchPref(
                         context = context,
                         prefs = agentPrefs,
-                        title = "灵屏使用期间自动解锁",
+                        title = "虚拟屏使用期间自动解锁",
                         key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
                         icon = Icons.Rounded.LockOpen,
                         iconTint = SettingsIconColors.Green,
                     )
                     CouiIconDivider()
                     SelectPref(
-                        title = "灵屏分辨率",
+                        title = "虚拟屏分辨率",
                         key = VirtualDisplayTuning.KEY_HEIGHT,
                         options = VirtualDisplayTuning.HEIGHT_OPTIONS,
                         default = VirtualDisplayTuning.DEFAULT_HEIGHT,
@@ -514,7 +532,7 @@ private fun SettingsPageContent(
                     )
                     CouiIconDivider()
                     SelectPref(
-                        title = "灵屏帧率",
+                        title = "虚拟屏帧率",
                         key = VirtualDisplayTuning.KEY_FPS,
                         options = VirtualDisplayTuning.FPS_OPTIONS,
                         default = VirtualDisplayTuning.DEFAULT_FPS,
@@ -524,13 +542,28 @@ private fun SettingsPageContent(
                     )
                     CouiIconDivider()
                     SelectPref(
-                        title = "灵屏闲置关闭时间",
+                        title = "虚拟屏闲置关闭时间",
                         key = VirtualDisplayTuning.KEY_GRACE_MINUTES,
                         options = VirtualDisplayTuning.GRACE_OPTIONS,
                         default = VirtualDisplayTuning.DEFAULT_GRACE_MINUTES,
                         label = VirtualDisplayTuning::graceLabel,
                         icon = Icons.Rounded.Schedule,
                         iconTint = SettingsIconColors.Green,
+                    )
+                    CouiIconDivider()
+                    PluginMasterSwitch(context = context, prefs = agentPrefs)
+                    CouiIconDivider()
+                    CouiPreference(
+                        title = "进程内插件作用域",
+                        summary = if (pluginScope.isEmpty()) {
+                            "未配置（点此加入包名）"
+                        } else {
+                            "已加入 ${pluginScope.size} 个应用 · 点此管理"
+                        },
+                        icon = {
+                            CouiSettingsIcon(Icons.Rounded.Extension, SettingsIconColors.Blue)
+                        },
+                        onClick = { pluginScopeDialog = true },
                     )
                     CouiIconDivider()
                     CouiPreference(
@@ -957,7 +990,7 @@ private fun SettingsPageContent(
                         SwitchPref(
                             context = context,
                             prefs = agentPrefs,
-                            title = "灵屏使用期间点亮屏幕",
+                            title = "虚拟屏使用期间点亮屏幕",
                             key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_KEEP_AWAKE,
                             icon = Icons.Rounded.LightMode,
                             iconTint = SettingsIconColors.Orange,
@@ -965,13 +998,13 @@ private fun SettingsPageContent(
                         SwitchPref(
                             context = context,
                             prefs = agentPrefs,
-                            title = "灵屏使用期间自动解锁",
+                            title = "虚拟屏使用期间自动解锁",
                             key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_DISMISS_KEYGUARD,
                             icon = Icons.Rounded.LockOpen,
                             iconTint = SettingsIconColors.Green,
                         )
                         SelectPref(
-                            title = "灵屏分辨率",
+                            title = "虚拟屏分辨率",
                             key = VirtualDisplayTuning.KEY_HEIGHT,
                             options = VirtualDisplayTuning.HEIGHT_OPTIONS,
                             default = VirtualDisplayTuning.DEFAULT_HEIGHT,
@@ -980,7 +1013,7 @@ private fun SettingsPageContent(
                             iconTint = SettingsIconColors.Blue,
                         )
                         SelectPref(
-                            title = "灵屏帧率",
+                            title = "虚拟屏帧率",
                             key = VirtualDisplayTuning.KEY_FPS,
                             options = VirtualDisplayTuning.FPS_OPTIONS,
                             default = VirtualDisplayTuning.DEFAULT_FPS,
@@ -989,13 +1022,30 @@ private fun SettingsPageContent(
                             iconTint = SettingsIconColors.Orange,
                         )
                         SelectPref(
-                            title = "灵屏闲置关闭时间",
+                            title = "虚拟屏闲置关闭时间",
                             key = VirtualDisplayTuning.KEY_GRACE_MINUTES,
                             options = VirtualDisplayTuning.GRACE_OPTIONS,
                             default = VirtualDisplayTuning.DEFAULT_GRACE_MINUTES,
                             label = VirtualDisplayTuning::graceLabel,
                             icon = Icons.Rounded.Schedule,
                             iconTint = SettingsIconColors.Green,
+                        )
+                        PluginMasterSwitch(context = context, prefs = agentPrefs)
+                        CouiIconDivider()
+                        ArrowPreference(
+                            title = "进程内插件作用域",
+                            summary = if (pluginScope.isEmpty()) {
+                                "未配置（点此加入包名）"
+                            } else {
+                                "已加入 ${pluginScope.size} 个应用 · 点此管理"
+                            },
+                            startAction = {
+                                SettingsIcon(
+                                    icon = Icons.Rounded.Extension,
+                                    tint = SettingsIconColors.Blue,
+                                )
+                            },
+                            onClick = { pluginScopeDialog = true },
                         )
                         ArrowPreference(
                             title = stringResource(R.string.ui_linux_tool_environment_314d22),
@@ -1379,6 +1429,138 @@ private fun SettingsPageContent(
         },
     )
 
+    // 进程内插件作用域（issue #234）：可搜索的应用列表，点选加入。
+    if (pluginScopeDialog) {
+        // 列表只在打开时读一次，避免每次重组都枚举安装包（很贵）。
+        val allApps = remember(pluginScopeDialog) {
+            io.github.mangi.eta.agent.plugin.PluginScopeStore.installedApps(context)
+        }
+        val query = pluginScopeInput.trim()
+        val filtered = remember(allApps, query) {
+            if (query.isBlank()) {
+                allApps
+            } else {
+                allApps.filter {
+                    it.label.contains(query, ignoreCase = true) ||
+                        it.packageName.contains(query, ignoreCase = true)
+                }
+            }
+        }
+        WindowDialog(
+            show = true,
+            title = "进程内插件作用域",
+            onDismissRequest = { pluginScopeDialog = false },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "点应用加入作用域；加入后它启动时会挂载插件宿主，Agent 可注入代码调内部方法。改完需重启目标应用。",
+                    style = top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles.footnote1,
+                )
+                Spacer(Modifier.height(8.dp))
+                // 已加入的，带移除按钮
+                if (pluginScope.isNotEmpty()) {
+                    TextButton(
+                        text = if (pluginScopeJoinedExpanded) "收起已加入（${pluginScope.size}）"
+                               else "展开已加入（${pluginScope.size}）",
+                        onClick = { pluginScopeJoinedExpanded = !pluginScopeJoinedExpanded },
+                    )
+                    if (pluginScopeJoinedExpanded) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 240.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            pluginScope.forEach { pkg ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        pkg,
+                                        modifier = Modifier.weight(1f),
+                                        style = top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles.body2,
+                                    )
+                                    TextButton(
+                                        text = "移除",
+                                        onClick = {
+                                            io.github.mangi.eta.agent.plugin.PluginScopeStore.remove(pkg)
+                                            pluginScope = io.github.mangi.eta.agent.plugin.PluginScopeStore.read()
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                top.yukonga.miuix.kmp.basic.TextField(
+                    value = pluginScopeInput,
+                    onValueChange = { pluginScopeInput = it },
+                    label = "搜索应用名或包名",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+
+                // 应用列表：限高可滚动，显示「应用名 + 包名」
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp),
+                ) {
+                    items(
+                        items = filtered,
+                        key = { it.packageName },
+                    ) { app ->
+                        val joined = app.packageName in pluginScope
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (joined) return@clickable
+                                    val ok = io.github.mangi.eta.agent.plugin.PluginScopeStore
+                                        .add(context, app.packageName)
+                                    pluginScope = io.github.mangi.eta.agent.plugin.PluginScopeStore.read()
+                                    // 写失败要让用户看见，不能点了没反应
+                                    if (!ok || app.packageName !in pluginScope) {
+                                        Toast.makeText(
+                                            context,
+                                            "写入失败：检查 /sdcard 是否可写",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    app.label + if (app.isSystem) "（系统）" else "",
+                                    style = top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles.body2,
+                                )
+                                Text(
+                                    app.packageName,
+                                    style = top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles.footnote1,
+                                )
+                            }
+                            Text(
+                                if (joined) "已加入" else "加入",
+                                style = top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles.body2,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    text = "关闭",
+                    onClick = { pluginScopeDialog = false },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+
     availableUpdate?.let { update ->
         when (LocalUiStyle.current) {
             AppearanceUiStyle.COUI -> {
@@ -1604,6 +1786,8 @@ private fun SelectPref(
             )
         }
     }
+
+
 }
 
 private fun putBooleanSync(
@@ -1658,3 +1842,59 @@ private fun SystemizerInstallResult.toToastMessage(context: Context): String =
             ?.let { "$message：$it" }
             ?: message
     }
+
+
+/**
+ * 进程内插件注入总开关。
+ *
+ * 与普通 SwitchPref 的区别：目标应用进程读不到 Eta 的 SharedPreferences，
+ * 所以除了写 prefs，还要把 0/1 写到双方都能读的文件里
+ * （/data/local/tmp/eta-app-plugins/enabled），AppPluginScope.isEnabled 会读它。
+ */
+@Composable
+private fun PluginMasterSwitch(context: Context, prefs: SharedPreferences?) {
+    val defaultOn = Prefs.Keys.BOOLEAN_DEFAULTS[Prefs.Keys.AGENT_PLUGIN_ENABLED] ?: true
+    val flagFile = java.io.File("/data/local/tmp/eta-app-plugins/enabled")
+    var checked by remember(prefs) {
+        mutableStateOf(
+            if (flagFile.isFile) flagFile.readText().trim() != "0"
+            else (prefs?.getBoolean(Prefs.Keys.AGENT_PLUGIN_ENABLED, defaultOn) ?: defaultOn)
+        )
+    }
+    val onToggle: (Boolean) -> Unit = { value ->
+        var fileOk = true
+        try {
+            flagFile.parentFile?.mkdirs()
+            flagFile.writeText(if (value) "1" else "0")
+        } catch (t: Throwable) {
+            fileOk = false
+        }
+        if (prefs != null) putBooleanSync(prefs, Prefs.Keys.AGENT_PLUGIN_ENABLED, value)
+        if (fileOk) {
+            checked = value
+            Toast.makeText(
+                context.applicationContext,
+                if (value) "已开启进程内注入（重启目标应用生效）" else "已关闭进程内注入（重启目标应用生效）",
+                Toast.LENGTH_SHORT,
+            ).show()
+        } else {
+            Toast.makeText(context.applicationContext, "写入开关文件失败，请检查 root", Toast.LENGTH_SHORT).show()
+        }
+    }
+    when (LocalUiStyle.current) {
+        AppearanceUiStyle.COUI -> CouiSwitchPreference(
+            title = "进程内注入总开关",
+            summary = "关闭后所有应用都不再挂载插件宿主（不动作用域配置）",
+            checked = checked,
+            onCheckedChange = onToggle,
+            icon = { CouiSettingsIcon(icon = Icons.Rounded.Extension, tint = SettingsIconColors.Blue) },
+        )
+        AppearanceUiStyle.MIUIX -> SwitchPreference(
+            title = "进程内注入总开关",
+            summary = "关闭后所有应用都不再挂载插件宿主（不动作用域配置）",
+            checked = checked,
+            onCheckedChange = onToggle,
+            startAction = { SettingsIcon(icon = Icons.Rounded.Extension, tint = SettingsIconColors.Blue) },
+        )
+    }
+}

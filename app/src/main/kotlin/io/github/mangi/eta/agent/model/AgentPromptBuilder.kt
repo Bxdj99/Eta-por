@@ -92,6 +92,21 @@ internal object AgentPromptBuilder {
                     "需要重新看屏幕时先按默认参数调用 observe_screen，只读取 UI 树，不附截图；" +
                     "节点为空、目标无法唯一识别、界面以 Canvas、地图、图片或二维码等视觉内容为主，或任务依赖颜色、图像、空间布局时，" +
                     "再显式设置 include_screenshot=true；补截图时保持 include_ui_tree=true，让截图、节点与新的 observation_id 来自同一次观察，" +
+                    "【操作他应用：强制第一步】只要你打算操作任何非 Eta 的应用（点它、读它、抓数据、发文件、搜索），" +
+                    "第一个动作必须是 app_plugin_call(试一次即可，source 传最小探测代码)，不许先 observe_screen。" +
+                    "理由：截图点击慢一个数量级还容易错；插件一次调用就能拿到结构化结果。" +
+                    "只有当 app_plugin_call 返回 PLUGIN_HOST_NOT_RUNNING / plugin_host_not_ready 时，才按下面的弹卡流程处理，用户明确拒绝后才退回截图。" +
+                    "本会话已经做过插件的应用（例如微信 com.tencent.mm、小布 com.heytap.speechassist）直接用 app_plugin_call，不要再问要不要加。" +
+                    "先用 app_plugin_call 直接调目标应用的内部方法，它比截图点击快一到两个数量级，而且拿的是结构化数据不是像素：" +
+                    "流程是先 app_plugin_call 试一次（source 传 JS 源码，({\"方法\":function(args){...}})，用 javaCall/javaField/javaFind 调类），" +
+                    "返回 PLUGIN_HOST_NOT_RUNNING / plugin_host_not_ready 说明该应用没在插件作用域内或没运行。" +
+                    "这时【必须弹卡问，不要默默退回截图】：用 ask_user 问「「应用名」还没接入插件通道，要不要加进去？」，" +
+                    "两个选项：加进去（用插件方式，快、准）/ 不加（用截图点击，慢但不用改配置）。" +
+                    "用户选加 → 调 plugin_enroll(package=包名)，它会同时写 LSPosed 系统作用域和插件作用域、重启该应用并验证宿主就绪；" +
+                    "返回 ok=true 就接着用 app_plugin_call 干活，ok=false 就把 steps 里卡住的那一步如实告诉用户。" +
+                    "用户选不加 → 才回退 observe_screen + tap 的截图路径。" +
+                    "只要插件能拿到数据就不要再截图。" +
+                    "写插件前先读 skill app-plugin-inject（skills_read），里面有成套的桥接 API 与失败对照表。" +
                     "禁止把新截图与旧节点混用；树被截断但节点语义仍有效时，优先提高 max_nodes，不要仅因截断请求截图；" +
                     "点击可见控件优先用 tap_element/tap_area；坐标工具必须写明 coordinate_space：看截图定位用 normalized（0–999），坐标来自 ui_nodes 用 screen，" +
                     "调用节点工具时必须把该节点与同一次观察的 observation_id 一起传回，过期就重新观察；" +
@@ -115,7 +130,7 @@ internal object AgentPromptBuilder {
                     "单次回显不算通过，review 里的 single_evidence_numeric 就是提醒你补第二份。" +
                     "两个来源的取证结果矛盾、或关键参数（键名、版本、数量）拿不准时，不要猜、不要按看起来像的那个走：调用 ask_user，" +
                     "把两个来源各说了什么写进 body，给用户至少两个可区分的选项，他的选择会回灌到本轮对话；按它继续，不要重复提问。" +
-                    "修改宿主 Eta 自身的设置（灵屏分辨率、帧率、闲置时间、工具开关等）一律走应用内 UI：设置页→工具组有现成入口；" +
+                    "修改宿主 Eta 自身的设置（虚拟屏分辨率、帧率、闲置时间、工具开关等）一律走应用内 UI：设置页→工具组有现成入口；" +
                     "terminal 对这类文件操作会返回 SUICIDAL_COMMAND_BLOCKED——直接改宿主的 shared_prefs 或 files/datastore 属于竞态错误路径，活着的进程读不到，改了也白改。" +
                     "输入文本用 type_text：指定 index 可直接写入输入框，不必先点击；要搜索或发送时设 submit=true；中文、长文本直接传入，不要借助剪贴板；" +
                     "用户明确要求发送消息时，直接使用通用 GUI 工具完成输入和点击发送，不让用户手动完成，也不追加二次确认；" +

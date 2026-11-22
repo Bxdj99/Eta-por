@@ -1,4 +1,10 @@
 minApiVersion=102
 targetApiVersion=102
-staticScope=true
+# staticScope=false：改用 LSPosed 的动态作用域。
+#
+# 之前是 true，LSPosed 会完全忽略 modules_config.db 里的 scope 表，
+# 只看 APK 内置的 scope.list——于是「把应用加入插件作用域」对
+# scope.list 之外的应用永远无效（微信、米家都栽在这里）。
+# 改 false 之后，用户在 LSPosed 里勾的应用（也就是我们写进 db 的）才真正生效。
+staticScope=false
 exceptionMode=protective

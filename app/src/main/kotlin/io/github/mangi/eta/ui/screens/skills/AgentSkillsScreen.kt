@@ -1,5 +1,16 @@
 package io.github.mangi.eta.ui.screens.skills
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import io.github.mangi.eta.agent.skill.SkillExporter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -53,6 +64,17 @@ fun AgentSkillsScreen(
     modifier: Modifier = Modifier,
 ) {
     var deleteTarget by remember { mutableStateOf<SkillItemUi?>(null) }
+    // 导出：先多选，再交给系统的「创建文档」选保存位置。
+    var exportPicker by remember { mutableStateOf(false) }
+    var exportSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var exportIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    val exportSaver = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri ->
+        if (uri != null && exportIds.isNotEmpty()) {
+            onAction(AgentSkillsAction.ExportSkills(exportIds, uri.toString()))
+        }
+    }
     val operationPending = state.isImporting || state.busySkillId != null
     val zipPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -96,6 +118,16 @@ fun AgentSkillsScreen(
                         },
                         enabled = !operationPending,
                         onClick = openZipPicker,
+                    )
+                    Divider()
+                    CouiPreference(
+                        title = stringResource(R.string.skills_export),
+                        summary = stringResource(R.string.skills_export_pick),
+                        enabled = !operationPending && installed.isNotEmpty(),
+                        onClick = {
+                            exportSelection = emptySet()
+                            exportPicker = true
+                        },
                     )
                 }
 
@@ -207,6 +239,16 @@ fun AgentSkillsScreen(
                             },
                             enabled = !operationPending,
                             onClick = openZipPicker,
+                        )
+                        top.yukonga.miuix.kmp.basic.HorizontalDivider()
+                        ArrowPreference(
+                            title = stringResource(R.string.skills_export),
+                            summary = stringResource(R.string.skills_export_pick),
+                            enabled = !operationPending && installed.isNotEmpty(),
+                            onClick = {
+                                exportSelection = emptySet()
+                                exportPicker = true
+                            },
                         )
                     }
                 }
@@ -337,6 +379,71 @@ fun AgentSkillsScreen(
         }
     }
 
+    // 导出多选：列出所有已安装技能，勾选后交给系统的创建文档选择器。
+    if (exportPicker) {
+        val exportable = installed
+        val allSelected = exportable.isNotEmpty() && exportSelection.size == exportable.size
+        WindowDialog(
+            show = true,
+            title = stringResource(R.string.skills_export),
+            onDismissRequest = { exportPicker = false },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // 技能多时必须限高滚动，否则底部的全选/导出按钮会被顶出屏幕。
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                ) {
+                    items(exportable, key = { it.id }) { skill ->
+                        ExportSkillRow(
+                            name = skill.name,
+                            id = skill.id,
+                            description = skill.description,
+                            checked = skill.id in exportSelection,
+                            onToggle = {
+                                exportSelection = if (skill.id in exportSelection) {
+                                    exportSelection - skill.id
+                                } else {
+                                    exportSelection + skill.id
+                                }
+                            },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    TextButton(
+                        text = stringResource(R.string.skills_export_all),
+                        onClick = {
+                            exportSelection = if (allSelected) {
+                                emptySet()
+                            } else {
+                                exportable.mapTo(mutableSetOf()) { it.id }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    TextButton(
+                        text = stringResource(R.string.skills_export_selected, exportSelection.size),
+                        enabled = exportSelection.isNotEmpty(),
+                        onClick = {
+                            exportPicker = false
+                            exportIds = exportSelection.toList()
+                            exportSaver.launch(SkillExporter.suggestedFileName(exportIds))
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
+                    )
+                }
+            }
+        }
+    }
+
     deleteTarget?.let { skill ->
         val onConfirmDelete: () -> Unit = {
             deleteTarget = null
@@ -407,3 +514,45 @@ fun AgentSkillsScreen(
         }
     }
 }
+
+/** 导出多选里的一行：名称 + id + 勾选态。 */
+@Composable
+private fun ExportSkillRow(
+    name: String,
+    id: String,
+    description: String,
+    checked: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        top.yukonga.miuix.kmp.basic.Text(
+            text = if (checked) "☑" else "☐",
+            modifier = Modifier.padding(end = 10.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            // 标题用 id（导入导出认的就是它），单行截断，避免长 id 换行把行高撑开。
+            top.yukonga.miuix.kmp.basic.Text(
+                text = id,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            val subtitle = description.ifBlank { name }
+            if (subtitle.isNotBlank() && subtitle != id) {
+                top.yukonga.miuix.kmp.basic.Text(
+                    text = subtitle,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    style = top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles.footnote1,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
+}
+

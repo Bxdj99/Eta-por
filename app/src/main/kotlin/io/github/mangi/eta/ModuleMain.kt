@@ -19,6 +19,8 @@ import io.github.mangi.eta.hook.hyperos.HyperOsLauncherHooks
 import io.github.mangi.eta.hook.hyperos.HyperOsScreenSearchHooks
 import io.github.mangi.eta.hook.system.SystemServerHooks
 import io.github.mangi.eta.hook.system.SystemUiHooks
+import io.github.mangi.eta.hook.appplugin.AppPluginHostEntry
+import io.github.mangi.eta.hook.appplugin.AppPluginScope
 import io.github.mangi.eta.hook.xiaoai.XiaoAiHooks
 
 class ModuleMain : XposedModule() {
@@ -120,6 +122,29 @@ class ModuleMain : XposedModule() {
                 }
             }
         }
+        // 进程内插件宿主（issue #234）：作用域内的应用进程里起 loopback HTTP 服务。
+        // 放在 when 之外：Breeno/Google 等结构化分支的应用同样能启用插件，
+        // 不能让宿主只对「无专用分支」的应用生效。
+        val pluginEnabled = AppPluginScope.isEnabled(param.packageName)
+        logger.info(
+            "AppPlugin check pkg=${param.packageName} first=${param.isFirstPackage} " +
+                "isCurrent=${isCurrentPackageProcess(param.packageName)} enabled=$pluginEnabled"
+        )
+        // 只在**主进程**启动插件宿主（进程名 == 包名）。
+        //
+        // 关键：ActivityThread.mActivities 只在主进程里有 Activity。
+        // 早先用 isCurrentPackageProcess（匹配 pkg 和 pkg:xxx），
+        // 导致宿主流落到 :plugin0 / :camera 这类子进程里——
+        // 插件能跑、能拿包名，但读 Activity 永远是 size=0，
+        // 于是「纯内存直连」做不到，只能退回去点屏幕。
+        if (param.isFirstPackage &&
+            currentProcessName == param.packageName &&
+            pluginEnabled
+        ) {
+            recordInstallation(
+                AppPluginHostEntry.install(this, logger, param.classLoader, param.packageName)
+            )
+        }
     }
 
     private fun recordInstallation(installation: HookInstallation) {
@@ -141,7 +166,14 @@ class ModuleMain : XposedModule() {
             isPackageProcess(processName, ModuleConfig.COLOR_DIRECT_PACKAGE) ||
             isPackageProcess(processName, ModuleConfig.BREENO_PACKAGE) ||
             processName == ModuleConfig.COLOROS_MEMORY_PACKAGE ||
-            isPackageProcess(processName, ModuleConfig.XIAOAI_PACKAGE)
+            isPackageProcess(processName, ModuleConfig.XIAOAI_PACKAGE) ||
+            // 插件作用域内的应用（issue #234）：需要 onPackageReady 来装 AppPluginHost。
+            // 早先只有结构化白名单能活到这一步，第三方包直接 detach，
+            // 宿主根本没机会装——作用域等于白配。
+            // 注意用 param.packageName 而不是 param.processName：进程名可能带 :suffix，
+            // 作用域里写的是包名，两者不一致会导致匹配不上。
+            // ModuleLoadedParam 只有 processName（可能带 :suffix），包名要自己截。
+            AppPluginScope.isEnabled(param.processName.substringBefore(':'))
     }
 
     private fun isCurrentXiaoAiProcess(): Boolean {

@@ -1453,4 +1453,19 @@
   <string name="conversation_group_clear_confirm">删除本组全部会话？</string>
   <string name="conversation_group_clear_action">删除 %d 个会话</string>
   <string name="conversation_group_selected">已选 %d 项</string>
+  <string name="skills_export">导出技能</string>
+  <string name="skills_export_pick">选择要导出的技能</string>
+  <string name="skills_export_selected">导出 %d 项</string>
+  <string name="skills_export_done">导出完成</string>
+  <string name="skills_export_done_detail">已导出 %1$d 个技能，共 %2$d 个文件</string>
+  <string name="skills_export_failed">导出失败</string>
+  <string name="skills_export_bad_target">保存位置不可用，请重新选择</string>
+  <string name="skills_export_all">全选</string>
+  <string name="skills_export_cancel">取消</string>
+
+  <string name="linux_full_kit_title">完整工具包（一键全装）</string>
+  <string name="linux_full_kit_summary">基础命令 + Python / Node / SSH / Kimi / APK 分析，一次装完；已装的会跳过</string>
+  <string name="linux_full_kit_ready">整套工具已就绪</string>
+  <string name="linux_full_kit_done">完整工具包安装完成</string>
+  <string name="linux_full_kit_partial">部分未装好：%1$s</string>
 </resources>

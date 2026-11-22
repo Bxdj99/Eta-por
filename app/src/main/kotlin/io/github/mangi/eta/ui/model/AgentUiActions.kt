@@ -58,6 +58,9 @@ sealed interface AgentSkillsAction {
     data class ToggleSkill(val skillId: String, val enabled: Boolean) : AgentSkillsAction
     data class DeleteSkill(val skillId: String) : AgentSkillsAction
     data class ReinstallBuiltin(val skillId: String) : AgentSkillsAction
+
+    /** 导出选中的技能为 ZIP。[targetUri] 来自系统的创建文档选择器。 */
+    data class ExportSkills(val skillIds: List<String>, val targetUri: String) : AgentSkillsAction
 }
 
 sealed interface AgentSystemEnhanceAction {

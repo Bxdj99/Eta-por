@@ -78,6 +78,7 @@ private enum class InstallTarget {
     BASE,
     TOOLS,
     APK_ANALYSIS,
+    FULL_KIT,
     PYTHON,
     NODE,
     SSH,
@@ -282,6 +283,70 @@ internal fun LinuxEnvironmentScreen(
         }
     }
 
+    /**
+     * 完整工具包：基础工具 + 全部 profile + APK 分析，一次装完。
+     *
+     * 逐个串行安装，任一项失败不中断后续（已装好的会走 AlreadyReady 快路径）。
+     * 已有环境的人点这个不会重装，只会补齐缺的。
+     */
+    fun installFullKit() {
+        if (busyTarget != null || requiresRoot) return
+        busyTarget = InstallTarget.FULL_KIT
+        resultMessage = null
+        launchInstallation {
+            // 第一步：基础工具（busybox/常用命令）
+            resultMessage = when (selectedDistribution) {
+                LinuxDistribution.ALPINE -> installer.installTools { update ->
+                    withContext(Dispatchers.Main.immediate) { progress = update }
+                }.toMessage(context)
+                LinuxDistribution.DEBIAN -> debianInstaller.installTools { update ->
+                    withContext(Dispatchers.Main.immediate) { debianProgress = update }
+                }.toMessage(context)
+            }
+            progress = null
+            debianProgress = null
+
+            // 第二步：逐个 profile
+            val failed = mutableListOf<String>()
+            for (profileUi in packageProfileUis) {
+                val profileInstaller = profileInstallers.getValue(profileUi.target)
+                val title = context.getString(profileUi.titleRes)
+                if (profileInstaller.isReady()) {
+                    profileReady = profileReady + (profileUi.target to true)
+                    continue
+                }
+                val result = profileInstaller.install { update ->
+                    withContext(Dispatchers.Main.immediate) {
+                        profileProgressSummary = update.summary(context, title)
+                    }
+                }
+                val ok = profileInstaller.isReady()
+                profileReady = profileReady + (profileUi.target to ok)
+                if (!ok) failed.add(title)
+            }
+            profileProgressSummary = null
+
+            // 第三步：APK 分析
+            if (!apkAnalysisInstaller.isReady()) {
+                apkAnalysisInstaller.install { update ->
+                    withContext(Dispatchers.Main.immediate) { apkAnalysisProgress = update }
+                }
+                apkAnalysisReady = apkAnalysisInstaller.isReady()
+                if (!apkAnalysisReady) failed.add(context.getString(R.string.linux_apk_tools_summary))
+            }
+            apkAnalysisProgress = null
+
+            status = installer.status()
+            debianStatus = debianInstaller.status()
+            resultMessage = if (failed.isEmpty()) {
+                context.getString(R.string.linux_full_kit_done)
+            } else {
+                context.getString(R.string.linux_full_kit_partial, failed.joinToString("、"))
+            }
+            busyTarget = null
+        }
+    }
+
     /** Kimi 就绪后按钮变为启动 Web UI：守护任务常驻 kimi web，解析地址后拉起浏览器。 */
     fun launchKimiWeb() {
         if (kimiWebLaunching || requiresRoot) return
@@ -438,6 +503,39 @@ internal fun LinuxEnvironmentScreen(
             }
             item(key = "optional-tools-card") {
                 val optionalItemsContent: @Composable () -> Unit = {
+                    // 完整工具包：一键把上面所有工具装完（已装的跳过）
+                    val fullKitReady = packageProfileUis.all { profileReady[it.target] == true } &&
+                        apkAnalysisReady
+                    val fullKitSummary = if (fullKitReady) {
+                        stringResource(R.string.linux_full_kit_ready)
+                    } else if (busyTarget == InstallTarget.FULL_KIT) {
+                        stringResource(R.string.linux_installing)
+                    } else {
+                        stringResource(R.string.linux_full_kit_summary)
+                    }
+                    if (uiStyle == AppearanceUiStyle.COUI) {
+                        CouiPreference(
+                            title = stringResource(R.string.linux_full_kit_title),
+                            summary = fullKitSummary,
+                            showChevron = false,
+                            trailing = {
+                                TextButton(
+                                    text = if (fullKitReady) {
+                                        stringResource(R.string.linux_installed)
+                                    } else {
+                                        stringResource(R.string.linux_install)
+                                    },
+                                    onClick = { if (!fullKitReady && busyTarget == null) installFullKit() },
+                                )
+                            },
+                        )
+                    } else {
+                        ArrowPreference(
+                            title = stringResource(R.string.linux_full_kit_title),
+                            summary = fullKitSummary,
+                            onClick = { if (!fullKitReady && busyTarget == null) installFullKit() },
+                        )
+                    }
                     packageProfileUis.forEachIndexed { index, profileUi ->
                         val ready = profileReady[profileUi.target] == true
                         val isKimi = profileUi.target == InstallTarget.KIMI

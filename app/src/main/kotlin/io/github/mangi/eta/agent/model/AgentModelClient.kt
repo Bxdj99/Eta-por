@@ -168,7 +168,23 @@ internal object AgentModelClient {
             for (index in 0 until additionalTools.length()) {
                 tools.put(additionalTools.opt(index))
             }
-            return toolFilter?.invoke(tools) ?: tools
+            val filtered = toolFilter?.invoke(tools) ?: tools
+            // 诊断：把本轮实际提供给模型的工具名落到 trace。
+            // 「模型说没工具」这类问题必须先能看见清单，否则只能猜。
+            runCatching {
+                val names = (0 until filtered.length()).mapNotNull { idx ->
+                    filtered.optJSONObject(idx)
+                        ?.optJSONObject("function")
+                        ?.optString("name")
+                        ?.takeIf { it.isNotBlank() }
+                }
+                io.github.mangi.eta.core.EtaTrace.log(
+                    "tools.publish",
+                    "count=${names.size} hasLaunch=${"launch_app" in names} " +
+                        "hasObserve=${"observe_screen" in names}",
+                )
+            }
+            return filtered
         }
         val tools = toolsFor(initialCapabilities)
         onEvent(

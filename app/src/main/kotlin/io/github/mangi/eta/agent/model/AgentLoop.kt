@@ -62,6 +62,9 @@ internal class AgentLoop(
     private var availableToolNames = emptySet<String>()
     private val accumulatedReasoning = StringBuilder()
 
+    /** 上下文超限后已截断重试的次数（最多 3 次，防死循环）。 */
+    private var contextOverflowRetries = 0
+
     /** 当前回合已生成的正文增量，插队中止时用它把半截回复收尾。 */
     private val streamedText = StringBuilder()
 
@@ -87,6 +90,42 @@ internal class AgentLoop(
 
     fun contextSnapshot(): AgentContextSnapshot? = context.snapshot()
 
+    /**
+     * 丢掉最早的一批对话消息，给上下文腾地方。
+     *
+     * 三条硬约束（违反了上游会直接 400）：
+     *  1. 开头的 system 消息不能动；
+     *  2. 不能留下「有 tool 结果但没有对应 tool_call」的孤儿；
+     *  3. 开头的第一条必须是 user（不能以 assistant/tool 起头）。
+     *
+     * @return 实际丢掉的条数；0 表示已经没得丢（只剩系统消息和最近一轮）。
+     */
+    private fun dropOldestMessages(ratio: Double): Int {
+        val total = messages.length()
+        // 保留开头的 system + 至少最近 4 条，其余按比例丢
+        val protectedHead = (0 until total).takeWhile {
+            messages.optJSONObject(it)?.optString("role") == "system"
+        }.size
+        val keepTail = 4
+        val available = total - protectedHead - keepTail
+        if (available <= 1) return 0
+        val dropCount = (available * ratio).toInt().coerceAtLeast(1)
+        var dropped = 0
+        repeat(dropCount) {
+            if (messages.length() <= protectedHead + keepTail) return dropped
+            messages.remove(protectedHead)
+            dropped++
+        }
+        // 修剪后若以 tool/assistant 起头，继续丢到 user 为止（保护对子完整性）
+        while (messages.length() > protectedHead + keepTail) {
+            val role = messages.optJSONObject(protectedHead)?.optString("role")
+            if (role == "user") break
+            messages.remove(protectedHead)
+            dropped++
+        }
+        return dropped
+    }
+
     private fun appendMessage(message: JSONObject) {
         messages.put(message)
         transcript.put(message)
@@ -100,8 +139,9 @@ internal class AgentLoop(
         publishedTranscriptSize = transcript.length()
     }
 
+    /** 用户手动点「压缩上下文」的唯一入口：manual=true 才真正执行压缩。 */
     fun compactOnly(): Result {
-        context.compact(force = true)
+        context.compact(force = true, manual = true)
         return Result("", "", emptySet())
     }
 
@@ -206,6 +246,29 @@ internal class AgentLoop(
                     rejectContentFilter(response.response)
                     if (purpose == ProviderRequestPurpose.CHAT) validateChatResponse(response.response)
                 }
+            } catch (overflow: AgentModelFailure) {
+                // 上下文超限兜底：**不压缩、不失败**，直接丢掉最早的一批历史消息再重试。
+                //
+                // 为什么不压缩：压缩会调模型重新总结，本身就要占用大量上下文，
+                // 在已经超限的会话里几乎必然再失败一次，然后把对话彻底打断（实测如此）。
+                // 截断最稳：只做本地操作，不依赖任何网络调用，一定能减小上下文。
+                //
+                // 最多重试 3 次，每次多丢 1/4，避免死循环。
+                if (overflow.code == "CONTEXT_OVERFLOW" && contextOverflowRetries < 3) {
+                    contextOverflowRetries += 1
+                    val dropped = dropOldestMessages(ratio = 0.25)
+                    onEvent(
+                        AgentEvent.ContextCompaction(
+                            operationId = operationId,
+                            phase = AgentEvent.ContextCompaction.PHASE_COMPLETED,
+                            reasonCode = "TRIMMED_OLDEST_$dropped",
+                        )
+                    )
+                    if (dropped == 0) throw overflow
+                    round += 1
+                    continue
+                }
+                throw overflow
             } catch (steer: SteeringInterrupt) {
                 // 插队即时接管：当前流被主动中止。把已生成的半截正文收成一条历史消息，
                 // 注入用户的插话，然后直接进下一轮——不再等这一轮自然说完。

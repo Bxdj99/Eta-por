@@ -1,5 +1,8 @@
 package io.github.mangi.eta.ui.screens.home
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
@@ -56,7 +59,12 @@ internal fun AgentHomeScreen(
                 LocalRoleplayChat provides state.roleplayChatUi(),
                 LocalAgentBrowserSession provides browser,
             ) {
-                androidx.compose.foundation.layout.Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize(),
+                ) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = androidx.compose.ui.Modifier.fillMaxWidth().weight(1f),
+                ) {
                 AgentChatBody(
                     messages = state.messages,
                     modelPickerState = modelPickerState,
@@ -109,14 +117,15 @@ internal fun AgentHomeScreen(
                     isDrawerOpen = isDrawerOpen,
                     modifier = modifier,
                 )
-                // 提问卡 / 审批卡：订阅 AgentConfirmGuard.pendings，叠在会话底部。
-                // 之前没有任何界面订阅它，用户点通知跳回来什么都看不到。
+                }
+                // 提问卡 / 审批卡：订阅 AgentConfirmGuard.pendings。
+                // 放在 AgentChatBody 之外、Column 的直接子项里，占真实布局高度——
+                // 之前浮在 Box 底部，被 AgentChatBody 的满屏 Scaffold 盖住，
+                // 只有切换会话触发重组才偶然看得见。
                 io.github.mangi.eta.ui.components.AgentAskCardHost(
                     conversationKey = conversationKey,
                     onSubmitReply = { reply -> onAction(AgentHomeAction.SubmitMessage(reply)) },
-                    modifier = androidx.compose.ui.Modifier
-                        .align(androidx.compose.ui.Alignment.BottomCenter)
-                        .padding(bottom = 96.dp),
+                    modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
                 )
                 }
             }

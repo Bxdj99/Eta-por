@@ -39,8 +39,8 @@ android {
         minSdk = 33
         targetSdk = 37
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
-        versionCode = 2026111071
-        versionName = "3.4.1-por72"
+        versionCode = 2026111758
+        versionName = "3.4.1-por158"
 
         ndk {
             // 同时过滤本地与依赖 AAR 的原生库，确保 APK 仅包含 ARM64。
@@ -150,6 +150,8 @@ androidComponents {
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
     implementation(libs.jsoup)
+    // 进程内插件脚本引擎（issue #234）：Agent 写 JS 文本，宿主在目标应用进程内用 Rhino 执行。
+    implementation("org.mozilla:rhino:1.8.0")
     implementation(libs.commons.compress)
     implementation(libs.xz)
     compileOnly(libs.libxposed.api)
@@ -157,6 +159,7 @@ dependencies {
     // Hook 侧用 XposedInterface.getRemotePreferences 读取当前进程持有的配置缓存。
     implementation(libs.libxposed.service)
     implementation(libs.dexkit)
+    implementation(libs.dexmaker)
     implementation(libs.coui)
     implementation(libs.miuix.ui)
     implementation(libs.miuix.blur)

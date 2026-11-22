@@ -207,22 +207,23 @@ internal class AgentRunMessageProjector(
             messages = messages,
         )
         val assistantId = assistantMessageId(runId, round, index)
-        var updated = false
-        val next = transitioned.map { message ->
-            if (message is AgentMessageUi && message.id == assistantId) {
-                updated = true
-                message.copy(
-                    content = message.content + delta,
-                    isStreaming = true,
-                    renderMarkdown = false,
-                )
-            } else {
-                message
-            }
-        }
-        if (updated) return next
 
-        return next + AgentMessageUi(
+        // 流式 delta 是高频事件（每秒可能几十次）。早先这里对整条消息列表做 map，
+        // 会话一长就是 O(n) × 每秒几十次，直接表现成输入卡顿。
+        // 改为按 id 定位一次，命中就局部替换；找不到再追加，整体仍是 O(n) 但只遍历一次。
+        val targetIndex = transitioned.indexOfFirst { it is AgentMessageUi && it.id == assistantId }
+        if (targetIndex >= 0) {
+            val next = transitioned.toMutableList()
+            val current = next[targetIndex] as AgentMessageUi
+            next[targetIndex] = current.copy(
+                content = current.content + delta,
+                isStreaming = true,
+                renderMarkdown = false,
+            )
+            return next
+        }
+
+        return transitioned + AgentMessageUi(
             id = assistantId,
             content = delta,
             isStreaming = true,
@@ -248,23 +249,22 @@ internal class AgentRunMessageProjector(
         )
         val thinkingId = thinkingMessageId(runId, round, index)
         val elapsedSeconds = elapsedSeconds(thinkingId)
-        var updated = false
-        val next = transitioned.map { message ->
-            if (message is ThinkingMessageUi && message.id == thinkingId) {
-                updated = true
-                message.copy(
-                    content = message.content + delta,
-                    isStreaming = true,
-                    elapsedSeconds = elapsedSeconds,
-                    collapsed = false,
-                )
-            } else {
-                message
-            }
-        }
-        if (updated) return next
 
-        return next + ThinkingMessageUi(
+        // 同 appendTextDelta：不要每帧对整表 map，定位一次就局部替换。
+        val targetIndex = transitioned.indexOfFirst { it is ThinkingMessageUi && it.id == thinkingId }
+        if (targetIndex >= 0) {
+            val next = transitioned.toMutableList()
+            val current = next[targetIndex] as ThinkingMessageUi
+            next[targetIndex] = current.copy(
+                content = current.content + delta,
+                isStreaming = true,
+                elapsedSeconds = elapsedSeconds,
+                collapsed = false,
+            )
+            return next
+        }
+
+        return transitioned + ThinkingMessageUi(
             id = thinkingId,
             content = delta,
             isStreaming = true,

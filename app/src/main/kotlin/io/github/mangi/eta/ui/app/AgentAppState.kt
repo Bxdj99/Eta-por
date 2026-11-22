@@ -801,6 +801,10 @@ internal class AgentAppState(
     fun selectConversation(conversationId: String) {
         if (homeState.messageEdit != null) cancelMessageEdit()
         val state = conversationsById[conversationId] ?: return
+        // 告诉审批/提问卡「用户现在看的是哪个会话」。
+        // 之前没人调这个绑定，currentConversation 恒为 ""，于是 ask() 打上的归属也是空，
+        // 卡片按会话过滤时永远匹配不上，用户压根看不到卡。
+        io.github.mangi.eta.agent.display.dashboard.AgentConfirmGuard.bindConversation(conversationId)
         val selectionVersion = ++conversationSelectionVersion
         cancelHistoryPageLoad()
         conversationSelectionJob?.cancel()

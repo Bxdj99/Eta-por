@@ -545,11 +545,16 @@ internal object AgentConfirmGuard {
     }
 
     private fun resume(context: Context?) {
-        // 1) 让还活着的 run 继续执行
-        context?.let {
-            runCatching {
-                AgentRuntimeClient(it.applicationContext, AndroidAgentLogger).resumeRun()
-            }.onFailure { e -> AndroidAgentLogger.warn("Confirm resume failed: ${e.message}") }
+        // 1) 让还活着的 run 继续执行。
+        // Runtime 同步客户端禁止主线程（acquire 会直接拒绝，trace 里能看到
+        // "runtime.acquire rejected=main_thread"）——用户点卡片就是在主线程回调里，
+        // 所以这里必须切到工作线程，否则 resume 永远发不出去。
+        context?.applicationContext?.let { app ->
+            Thread {
+                runCatching {
+                    AgentRuntimeClient(app, AndroidAgentLogger).resumeRun()
+                }.onFailure { e -> AndroidAgentLogger.warn("Confirm resume failed: ${e.message}") }
+            }.start()
         }
         // 2) 无条件清掉暂停标记：那一轮很可能已经结束，
         //    requestResume 找不到活动 run 就不会回调 setPaused(false)，

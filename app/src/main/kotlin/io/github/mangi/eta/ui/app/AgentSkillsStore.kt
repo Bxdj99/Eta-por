@@ -1,5 +1,6 @@
 package io.github.mangi.eta.ui.app
 
+import io.github.mangi.eta.agent.skill.SkillExporter
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
@@ -129,6 +130,53 @@ internal class AgentSkillsStore(
                 )
             }
             refreshSkills()
+        }
+    }
+
+    /**
+     * 导出选中的技能为 ZIP。
+     *
+     * 与导入对称：导入认「目录里带 SKILL.md」，导出就把整个技能目录按 <id>/SKILL.md 写进去，
+     * 所以导出的包能直接再导入别处。跑在 IO 线程，完成后弹一条结果提示。
+     */
+    fun exportSkills(skillIds: List<String>, targetUri: String) {
+        if (skillIds.isEmpty()) return
+        if (skillsState.isImporting || skillsState.busySkillId != null) return
+        val uri = runCatching { Uri.parse(targetUri) }.getOrNull()
+            ?.takeIf { it.scheme == ContentResolver.SCHEME_CONTENT }
+        if (uri == null) {
+            skillsState = skillsState.copy(
+                notice = newSkillNotice(
+                    title = appContext.getString(R.string.skills_export_failed),
+                    message = appContext.getString(R.string.skills_export_bad_target),
+                    isError = true,
+                ),
+            )
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            val result = SkillExporter.export(appContext, skillIds, uri)
+            withContext(Dispatchers.Main) {
+                skillsState = skillsState.copy(
+                    notice = if (result.ok) {
+                        newSkillNotice(
+                            title = appContext.getString(R.string.skills_export_done),
+                            message = appContext.getString(R.string.skills_export_done_detail, skillIds.size, result.fileCount),
+                            isError = false,
+                        )
+                    } else {
+                        newSkillNotice(
+                            title = appContext.getString(R.string.skills_export_failed),
+                            message = result.error,
+                            isError = true,
+                        )
+                    },
+                )
+            }
+            io.github.mangi.eta.core.EtaTrace.log(
+                "skills.export",
+                "ok=${result.ok} skills=${skillIds.size} files=${result.fileCount} err=${result.error.take(60)}",
+            )
         }
     }
 

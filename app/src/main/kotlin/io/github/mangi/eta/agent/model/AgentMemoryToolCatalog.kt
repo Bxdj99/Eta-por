@@ -48,7 +48,7 @@ internal object AgentMemoryToolCatalog {
                 name = "memory_detail",
                 description = "记忆的细节区（冷区）。核心记忆 MEMORY.md 只保留结论、关键参数和指针，正文细节写在这里，按主题分文件。" +
                     "list：列出已有主题（名字、大小、更新时间、首行标题）；read：读一个主题的正文；write：整篇覆盖写；delete：删除。" +
-                    "写入时机：内容超过三五行、属于踩坑过程或环境细节、以后可能反复查询时，写细节区并在 MEMORY.md 核心区留一行指针，例如「详见 memory_detail:eta-灵屏」。",
+                    "写入时机：内容超过三五行、属于踩坑过程或环境细节、以后可能反复查询时，写细节区并在 MEMORY.md 核心区留一行指针，例如「详见 memory_detail:eta-虚拟屏」。",
                 parameters = JSONObject()
                     .put("type", "object")
                     .put(
@@ -66,7 +66,7 @@ internal object AgentMemoryToolCatalog {
                                 JSONObject()
                                     .put("type", "string")
                                     .put("maxLength", 64)
-                                    .put("description", "主题名（不含扩展名），如 eta-灵屏。read/write/delete 必填。"),
+                                    .put("description", "主题名（不含扩展名），如 eta-虚拟屏。read/write/delete 必填。"),
                             )
                             .put(
                                 "title",

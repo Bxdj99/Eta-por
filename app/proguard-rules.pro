@@ -70,3 +70,30 @@
 -keep class io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayCommandMain {
     public static void main(java.lang.String[]);
 }
+
+# Rhino（issue #234 进程内插件脚本引擎）
+# Rhino 引用了 java.beans 等 Android 上不存在的 JDK 类；这些路径只在
+# 「Java Bean 内省」时走到，Android 插件场景不会触碰，直接 dontwarn。
+-dontwarn java.beans.**
+-dontwarn java.lang.invoke.**
+-dontwarn sun.misc.**
+# Rhino 脚本上下文/对象保留类名：插件脚本通过字符串引用它的 API。
+-keep class org.mozilla.javascript.** { *; }
+# Rhino 的 JVM dynalink 优化路径（Android 无 jdk.dynalink），插件场景不走。
+-dontwarn jdk.dynalink.**
+
+# 插件 Java 桥：所有 BaseFunction 子类必须保留 call/call 的签名，
+# 否则 R8 改名后 Rhino 找不到入口，表现为「名字在、调用报 msg.undef.method.call」。
+-keep class io.github.mangi.eta.hook.appplugin.JavaBridge$* {
+    public *;
+}
+-keepclassmembers class * extends org.mozilla.javascript.BaseFunction {
+    public java.lang.Object call(org.mozilla.javascript.Context, org.mozilla.javascript.Scriptable, org.mozilla.javascript.Scriptable, java.lang.Object[]);
+    public java.lang.String getFunctionName();
+}
+
+# DexMaker：运行时用反射生成抽象类子类，类名与成员必须保留，否则 R8 会整包裁掉。
+-keep class com.android.dx.** { *; }
+-keep class com.linkedin.dexmaker.** { *; }
+-dontwarn com.android.dx.**
+-dontwarn com.linkedin.dexmaker.**

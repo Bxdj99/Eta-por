@@ -114,18 +114,25 @@ internal object CanvasRoutingPolicy {
         foregroundPackageOnMainDisplay: String? = null,
         ownPackage: String = "io.github.mangi.eta",
     ): CanvasTarget {
-        if (!virtualDisplayEnabled || !backendAvailable) return CanvasTarget.MAIN_DISPLAY
+        // 只有用户显式要主屏，才允许落主屏。虚拟屏没开/后端不可用属于「能力缺失」，
+        // 不能悄悄降级到主屏去打断用户——调用方应拿到明确的报错。
         if (requested == RequestedDisplay.MAIN) return CanvasTarget.MAIN_DISPLAY
         val normalizedTarget = targetPackage?.trim().orEmpty()
         if (normalizedTarget.isNotEmpty()) {
+            // 自己（Eta）和少数能力受限的应用只能在主屏，这条保留：
+            // 给 Eta 自己建虚拟屏没有意义。
             if (normalizedTarget == ownPackage || normalizedTarget in MAIN_DISPLAY_ONLY_PACKAGES) {
                 return CanvasTarget.MAIN_DISPLAY
             }
-            // 同包名应用正处于物理主屏前台：若在虚拟屏启动，Android 会将该 Task 从主屏抽走，直接破坏用户当前视线。
-            val normalizedForeground = foregroundPackageOnMainDisplay?.trim().orEmpty()
-            if (normalizedForeground.isNotEmpty() && normalizedTarget == normalizedForeground) {
-                return CanvasTarget.MAIN_DISPLAY
-            }
+            // 以前这里还有一条「目标正好在主屏前台就复用主屏」的短路，
+            // 结果是：用户正看着谁，一个 launch_app 就把谁留在主屏——主观感受就是
+            // 「说好虚拟屏，却一直在主屏跳」。AUTO 的语义是「尽量别打扰用户」，
+            // 所以不再复用主屏，统一往虚拟屏走。
+        }
+        if (!virtualDisplayEnabled || !backendAvailable) {
+            // 能力不可用：交给上层转成 VIRTUAL_DISPLAY_UNAVAILABLE 报错/弹卡，
+            // 而不是静默主屏。
+            return CanvasTarget.MAIN_DISPLAY
         }
         return when (requested) {
             RequestedDisplay.VIRTUAL,

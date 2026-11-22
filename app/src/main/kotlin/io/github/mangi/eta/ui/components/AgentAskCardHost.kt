@@ -57,7 +57,15 @@ internal fun AgentAskCardHost(
     val pendings by AgentConfirmGuard.pendings.collectAsState()
     val pending = remember(pendings, conversationKey) {
         pendings.firstOrNull { item ->
-            !item.expired() && (conversationKey == null || item.conversationKey == conversationKey)
+            if (item.expired()) return@firstOrNull false
+            // 归属匹配要容忍空 owner：
+            // AgentConfirmGuard.ask() 里 owner 取自 conversationOfRun(runId).ifBlank { currentConversation }，
+            // 而 bindConversation 目前没有任何调用方，currentConversation 恒为 ""。
+            // 早先这里要求 item.conversationKey == conversationKey（真实会话 id），
+            // 于是永远匹配不上，卡根本渲染不出来。
+            conversationKey == null ||
+                item.conversationKey.isBlank() ||
+                item.conversationKey == conversationKey
         }
     } ?: return
 

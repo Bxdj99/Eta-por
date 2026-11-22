@@ -6,6 +6,87 @@ import org.json.JSONObject
 /** 上下文、应用入口与屏幕观察工具 schema。 */
 internal object AgentContextAppToolCatalog {
     /** 用户裁决卡：不确定时让用户选，不要自己猜。 */
+    /**
+     * 把应用加入插件作用域（issue #234）。
+     *
+     * 两道门一起开：LSPosed 系统级作用域 + 插件应用级作用域，
+     * 然后重启应用并验证宿主起来。用户只管说「加」，技术细节全在这。
+     */
+    fun appendPluginEnroll(tools: JSONArray) {
+        tools.put(
+            AgentToolSchema.function(
+                name = "plugin_enroll",
+                description = "把目标应用加入进程内插件作用域（同时写 LSPosed 系统作用域和插件作用域，重启应用并验证宿主就绪）。" +
+                    "调用前应当先用 ask_user 问过用户要不要加。" +
+                    "返回 ok=true 表示宿主已就绪，之后可以用 app_plugin_call 直接调它的内部方法；" +
+                    "ok=false 时 steps 会指出卡在哪一步。",
+                parameters = JSONObject()
+                    .put("type", "object")
+                    .put(
+                        "properties",
+                        JSONObject().put(
+                            "package",
+                            JSONObject().put("type", "string").put("description", "目标应用包名"),
+                        ),
+                    )
+                    .put("required", JSONArray().put("package")),
+            ),
+        )
+    }
+
+    /**
+     * 进程内插件调用（issue #234）：对作用域内应用直接调它的内部能力。
+     * 宿主 hook 在目标应用进程里起 loopback HTTP 服务，插件由 Agent 写 JS 热加载。
+     */
+    fun appendAppPluginCall(tools: JSONArray) {
+        tools.put(
+            AgentToolSchema.function(
+                name = "app_plugin_call",
+                description = "【操作非 Eta 应用时的第一个动作】在目标应用进程内直接调它的内部能力（经 LSPosed 插件宿主）。" +
+                    "点它、读它、抓数据、发文件、搜索之前，先调这个工具试一次，不要先 observe_screen 截图。" +
+                    "用法：source 传 JS 源码，最后一句求值成一个对象 ({\"方法\":function(args){...}})，" +
+                    "用 javaCall/javaField/javaNew/javaFind 调目标应用的类；method 填对象里的键名。" +
+                    "返回 ok=true 就是拿到了结构化结果，不要再去截图。" +
+                    "返回 PLUGIN_HOST_NOT_RUNNING / plugin_host_not_ready 才说明宿主没起：这时用 ask_user 弹卡问用户要不要加进作用域，" +
+                    "用户同意就调 plugin_enroll，别自己默默退回截图。" +
+                    "method_not_found 时先 javaFind 看真实方法名。",
+                parameters = JSONObject()
+                    .put("type", "object")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("package", JSONObject().put("type", "string").put("description", "目标应用包名"))
+                            .put("plugin", JSONObject().put("type", "string").put("description", "插件 id（即 app-plugins/<包名>/ 下的 js 文件名，不含 .js）"))
+                            .put("method", JSONObject().put("type", "string").put("description", "插件里 register 调用里定义的方法名"))
+                            .put("action", JSONObject().put("type", "string")
+                                .put("enum", JSONArray()
+                                    .put("env").put("find").put("field")
+                                    .put("call").put("activity").put("dump")
+                                    .put("search").put("loaders").put("get")
+                                    .put("scan").put("classes"))
+                                .put("description",
+                                    "预置动作，免写 JS：env(环境自检) / find(列类成员，args={cls,keyword}) / " +
+                                        "field(读静态字段，args={cls,field}) / call(调静态方法，args={cls,method,args}) / " +
+                                        "activity(拿当前Activity，args={members:true 附带方法表}) / " +
+                                        "dump(列类成员，args={cls,keyword}) / " +
+                                        "search(按关键词搜已加载类，args={keyword}，不解APK找混淆类的首选) / " +
+                                        "loaders(查所有ClassLoader及某类能被哪个加载，args={cls}，动态模块应用必用) / " +
+                                        "get(按路径读字段，args={obj,path}) / " +
+                                        "scan(按类型扫堆找实例，args={cls,limit}，不知对象在哪时的终极手段) / " +
+                                        "classes(按前缀列可见类，args={prefix})。" +
+                                        "优先用它，比每次现写 source 快得多。"))
+                            .put("args", JSONObject().put("type", "object").put("description", "传给插件方法/预置动作的参数对象"))
+                            .put("source", JSONObject().put("type", "string").put("description",
+                                "可选：直接传 JS 插件源码，宿主现场在目标应用进程内执行（推荐，绕开沙盒文件隔离）。" +
+                                    "源码的最后一句必须求值成一个对象，其属性名即方法名：" +
+                                    "({\"方法名\": function(args){ ... return {...}; }})。" +
+                                    "可用全局：packageName、appContext、java(loadClass 反射)、log.d/w、json。")),
+                    )
+                    .put("required", JSONArray().put("package").put("plugin").put("method")),
+            ),
+        )
+    }
+
     fun appendAskUser(tools: JSONArray) {
         tools.put(
             AgentToolSchema.function(
@@ -143,7 +224,7 @@ internal object AgentContextAppToolCatalog {
                                         .put("default", "auto")
                                         .put(
                                             "description",
-                                            "启动目标画布：auto（默认，跨应用任务优先在后台虚拟屏执行，不打断用户当前主屏）、virtual（显式在后台虚拟屏启动）、main（显式在物理主屏前台打开）。用户说的「灵屏」「灵屏里」「后台虚拟屏」都指 virtual / auto，它是画布不是应用名，不要为「灵屏」调用 search_apps。"
+                                            "启动目标画布：auto（默认，跨应用任务优先在后台虚拟屏执行，不打断用户当前主屏）、virtual（显式在后台虚拟屏启动）、main（显式在物理主屏前台打开）。用户说的「虚拟屏」「后台虚拟屏」「灵屏」都指 virtual / auto，它是画布不是应用名，不要为它调用 search_apps。"
                                         )
                                 )
                         )

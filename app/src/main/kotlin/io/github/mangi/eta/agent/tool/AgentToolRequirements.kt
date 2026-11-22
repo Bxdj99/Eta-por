@@ -33,6 +33,15 @@ internal object AgentToolRequirements {
         }
         register(
             RootRequirement.NONE,
+            // ask_user 是纯 UI 通道：弹卡 + 回灌，不碰设备也不需要任何系统权限。
+            // 必须登记：project() 用 unavailableCode() 过滤工具，
+            // 未登记的会被判 UNKNOWN_TOOL 剔除，模型根本看不到这个工具，
+            // 于是从来没调用过它，提问卡也就永远不会出现。
+            "ask_user",
+            // 插件调用：宿主服务在目标应用进程里，工具本身走 root 读端口文件 + HTTP，
+            // 没有宿主时返回明确错误而不是崩溃，所以权限档位是 NONE。
+            "app_plugin_call",
+            "plugin_enroll",
             "get_current_context", "search_apps", "launch_app", "present_to_user", "open_uri", "browser_use", "web_search", "fetch_url",
             "observe_screen", "release_gui", "tap", "tap_area", "tap_element", "long_press",
             "long_press_element", "swipe", "scroll", "scroll_element", "type_text", "input_text",

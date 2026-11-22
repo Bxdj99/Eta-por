@@ -34,9 +34,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
- * 灵屏（后台虚拟屏）面板：看它现在有没有在跑、跑的是哪个应用、画幅多大，
- * 并且给两个直达动作 ——「搬到主屏看」（把灵屏里的应用整块挪到主屏，肉眼可见）
- * 和「关闭灵屏」（跳过 120 分钟宽限，立刻拆屏）。
+ * 虚拟屏（后台）面板：看它现在有没有在跑、跑的是哪个应用、画幅多大，
+ * 并且给两个直达动作 ——「搬到主屏看」（把虚拟屏里的应用整块挪到主屏，肉眼可见）
+ * 和「关闭虚拟屏」（跳过 120 分钟宽限，立刻拆屏）。
  */
 @Composable
 internal fun VirtualDisplayPanelDialog(
@@ -57,7 +57,7 @@ internal fun VirtualDisplayPanelDialog(
             val ok = withContext(Dispatchers.IO) {
                 runCatching { VirtualDisplayController.handoffToMainDisplay(context) }.getOrDefault(false)
             }
-            notice = if (ok) "已把灵屏里的应用搬到主屏，去主屏看" else "没能搬过去：灵屏可能已经结束"
+            notice = if (ok) "已把虚拟屏里的应用搬到主屏，去主屏看" else "没能搬过去：虚拟屏可能已经结束"
         }
     }
     val closeDisplay: () -> Unit = {
@@ -65,7 +65,7 @@ internal fun VirtualDisplayPanelDialog(
             withContext(Dispatchers.IO) {
                 runCatching { VirtualDisplayController.closeNow(context) }
             }
-            notice = "已关闭灵屏"
+            notice = "已关闭虚拟屏"
         }
     }
 
@@ -85,7 +85,7 @@ internal fun VirtualDisplayPanelDialog(
             }
             if (active) {
                 TextButton(
-                    text = "打开灵屏画面（可触摸操作）",
+                    text = "打开虚拟屏画面（可触摸操作）",
                     onClick = { viewerOpen = true },
                     minWidth = 0.dp,
                     modifier = Modifier
@@ -118,7 +118,7 @@ internal fun VirtualDisplayPanelDialog(
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(
-                        text = "关闭灵屏",
+                        text = "关闭虚拟屏",
                         onClick = closeDisplay,
                         minWidth = 0.dp,
                         modifier = Modifier.weight(1f),
@@ -147,7 +147,7 @@ internal fun VirtualDisplayPanelDialog(
         AppearanceUiStyle.COUI -> {
             CouiNoticeDialog(
                 visible = true,
-                title = "灵屏（后台虚拟屏）",
+                title = "虚拟屏（后台）",
                 message = null,
                 confirmText = closeText,
                 onDismissRequest = onDismiss,
@@ -157,7 +157,7 @@ internal fun VirtualDisplayPanelDialog(
             WindowDialog(
                 show = true,
                 cornerRadius = DialogDefaults.CornerRadius,
-                title = "灵屏（后台虚拟屏）",
+                title = "虚拟屏（后台）",
                 onDismissRequest = onDismiss,
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {

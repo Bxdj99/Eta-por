@@ -18,7 +18,14 @@ internal class AgentContextSession(
     private val transcriptSize: () -> Int = { 0 },
     private val roleplay: Boolean = false,
 ) {
-    private val contextWindow = config.knownContextWindow
+    /**
+     * 上下文窗口预算：**只用模型真实上报的值，不猜默认值**。
+     *
+     * 之前给过 64k 默认值，结果自定义/中转提供商（不报窗口）每轮都被判成
+     * 「已用 85%」→ 每条消息都触发压缩 → 压缩失败 → 对话直接中断。
+     * 现在窗口未知就不触发自动压缩；用户要压缩就手动点。
+     */
+    private val contextWindow: Int? = config.knownContextWindow
     private var inputTokens: Int? = null
     private var compacted = false
     private var consumedSupplementCount = 0
@@ -59,7 +66,22 @@ internal class AgentContextSession(
         )
     }
 
-    fun compact(force: Boolean = false, final: Boolean = false) {
+    /**
+     * 上下文压缩。
+     *
+     * **只允许手动触发**（用户在聊天页点「压缩上下文」）。
+     * 自动触发的三条路径全部关掉：
+     *  - AgentLoop 每轮结束的 context.compact()
+     *  - 收尾时的 context.compact(final = true)
+     *  - 超限兜底的 compact(force = true)
+     *
+     * 原因：这些自动路径一旦判断失误（比如窗口值估算偏差），
+     * 就会每条消息都触发压缩，压缩失败直接中断对话——用户完全没法用。
+     *
+     * @param manual 只有 UI 手动入口传 true，其它调用方一律默认 false（直接返回）。
+     */
+    fun compact(force: Boolean = false, final: Boolean = false, manual: Boolean = false) {
+        if (!manual) return
         val before = inputTokens
         if (SignedToolContext.hasPendingResponse(messages)) {
             if (force) {
@@ -121,5 +143,8 @@ internal class AgentContextSession(
 
     private companion object {
         const val TRIGGER_RATIO = 0.85
+
+        /** 未知窗口时的兜底预算（多数主流模型 ≥ 128k，按 64k 保守触发压缩）。 */
+        const val DEFAULT_CONTEXT_WINDOW = 64_000
     }
 }

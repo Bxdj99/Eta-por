@@ -1586,4 +1586,19 @@
   <string name="conversation_group_clear_confirm">删除本组全部会话？</string>
   <string name="conversation_group_clear_action">删除 %d 个会话</string>
   <string name="conversation_group_selected">%d selected</string>
+  <string name="skills_export">Export skills</string>
+  <string name="skills_export_pick">Select skills to export</string>
+  <string name="skills_export_selected">Export %d</string>
+  <string name="skills_export_done">Export complete</string>
+  <string name="skills_export_done_detail">Exported %1$d skills, %2$d files</string>
+  <string name="skills_export_failed">Export failed</string>
+  <string name="skills_export_bad_target">Save location unavailable, pick another</string>
+  <string name="skills_export_all">Select all</string>
+  <string name="skills_export_cancel">Cancel</string>
+
+  <string name="linux_full_kit_title">Full Toolkit (install all)</string>
+  <string name="linux_full_kit_summary">Base commands + Python / Node / SSH / Kimi / APK analysis in one go; already-installed items are skipped</string>
+  <string name="linux_full_kit_ready">Full toolkit ready</string>
+  <string name="linux_full_kit_done">Full toolkit installed</string>
+  <string name="linux_full_kit_partial">Not installed: %1$s</string>
 </resources>

@@ -1,5 +1,6 @@
 package io.github.mangi.eta.agent.tool
 
+import io.github.mangi.eta.agent.plugin.BuiltinPluginActions
 import io.github.mangi.eta.agent.automation.AgentTaskTools
 import io.github.mangi.eta.agent.automation.ConversationCategoryTools
 
@@ -247,6 +248,8 @@ internal class AgentLocalTools(
                     AgentModelClient.ToolResult(ConversationCategoryTools(context).execute(toolCall.name, args), sensitive = true)
                 "get_current_context" -> textResult(DeviceContextTool.current(context))
                 "ask_user" -> textResult(askUser(args, toolCall))
+                "app_plugin_call" -> textResult(appPluginCall(args))
+                "plugin_enroll" -> textResult(pluginEnroll(args))
                 "search_apps" -> textResult(searchApps(args))
                 "launch_app" -> {
                     publishedObservation.set(PublishedObservation())
@@ -429,10 +432,82 @@ internal class AgentLocalTools(
         if (command.isBlank()) return null
         val contextText = command + " " + args.optString("cwd")
         val ownPackage = context.packageName
-        val killPattern = "am\\s+force-stop|pkill|killall|pm\\s+clear"
-        val killsSelf = Regex(killPattern).containsMatchIn(contextText) && contextText.contains(ownPackage)
-        val editsOwnPrefs = (contextText.contains("/shared_prefs/") || contextText.contains("/databases/")) &&
-            contextText.contains(ownPackage)
+
+        // 拦住「用 terminal 裸启动应用」：monkey -p / am start 会绕过画布分流，
+        // 直接把应用顶到用户主屏（实测把用户桌面duang来duang去）。
+        // 启动应用只允许走 launch_app，它带 --display，能落到虚拟屏。
+        // 只对「真的要执行启动」的命令判定。
+        // git commit / echo / grep / sed 这类命令里出现关键词只是**文本内容**，
+        // 不是真去启动应用（实测自己的 commit message 被误拦）。
+        val isTextOnlyCommand = Regex(
+            """^\s*(?:git\s+commit|echo|printf|grep|rg|sed|awk|cat|head|tail|python3?\s+-c)""",
+        ).containsMatchIn(command)
+        val launchesOtherApp = !isTextOnlyCommand && Regex(
+            """(?:monkey\s+-p|am\s+start(?!\s+--display))""",
+        ).containsMatchIn(command) && !command.contains(ownPackage)
+        if (launchesOtherApp) {
+            val target = Regex("""monkey\s+-p\s+([\w.]+)""").find(command)?.groupValues?.get(1)
+                ?: Regex("""am\s+start[^\n]*-n\s+([\w.]+)""").find(command)?.groupValues?.get(1)
+                ?: "目标应用"
+            return JSONObject()
+                .put("ok", false)
+                .put("code", "USE_LAUNCH_APP")
+                .put("message",
+                    "不要用 terminal 启动应用（$target）：monkey/裸 am start 会绕过画布分流，把应用直接顶到用户主屏。" +
+                        "请改用 launch_app(app_name=…或 package_name=…)，它默认在后台虚拟屏打开，不打断用户。" +
+                        "需要主屏时才显式传 display=main。")
+                .toString()
+        }
+
+        // 用户口径：读自己的数据必须无条件放行（排查自身 bug 时天天要读）。
+        // 只有「杀自己」和「写自家配置」才拦。
+        val readOnlySelfAccess = Regex(
+            """^\s*(?:cat|head|tail|less|more|grep|rg|ls|find|stat|wc|strings|hexdump|xxd|od|file|du|df|md5sum|sha256sum)\b""",
+        ).containsMatchIn(command) ||
+            (Regex("""\bsqlite3\b""").containsMatchIn(command) &&
+                !Regex("""\b(?:insert|update|delete|drop|alter|create|replace|vacuum|attach)\b""",
+                    RegexOption.IGNORE_CASE).containsMatchIn(command))
+        // 纯读命令直接放行，不做后续判定。
+        if (readOnlySelfAccess) return null
+
+        // 判定「杀的是不是自己」不能只看整条命令里有没有包名。
+        // 反例：`am force-stop com.sangfor.atrust` 明明是杀别人的应用，
+        // 但只要 cwd 或别处提到过自己的包名就会被误拦（实测踩到）。
+        // 正确做法：把 kill 类命令的目标包名逐个抠出来，只有当目标就是自己才拦。
+        val killTargets = buildList {
+            Regex("""am\s+force-stop\s+(?:--user\s+\d+\s+)?([\w.]+)""")
+                .findAll(command).forEach { add(it.groupValues[1]) }
+            Regex("""pm\s+clear\s+(?:--user\s+\d+\s+)?([\w.]+)""")
+                .findAll(command).forEach { add(it.groupValues[1]) }
+            // killall/pkill 杀的是进程名：自己的进程名可能就是包名，也可能带后缀。
+            Regex("""(?:killall|pkill)\s+(?:-\S+\s+)*([\w.\-]+)""")
+                .findAll(command).forEach { add(it.groupValues[1]) }
+        }
+        val killsSelf = killTargets.any { target ->
+            target == ownPackage || target.startsWith("$ownPackage:")
+        }
+
+        // 改自家配置必须是**写**操作。
+        //
+        // 这里踩过两次坑：
+        //  1. 只看路径会把 cat/ls 这类只读也拦掉；
+        //  2. 把 sqlite3 整个算作写，于是 `sqlite3 eta.db "select ..."` 这种纯查询
+        //     也被拦——而排查自身问题恰恰天天要读库。
+        // 现在按**动作**判定：sqlite3 只有在带写语句时才算写；
+        // 重定向只看是否写到目标文件（`<` 读、管道输出到别处都不算）。
+        val touchesOwnStorage = contextText.contains("/shared_prefs/") || contextText.contains("/databases/")
+        val sqliteWrite = Regex("""\bsqlite3\b[^|;]*\b(?:insert|update|delete|drop|alter|create|replace|vacuum|attach)\b""",
+            RegexOption.IGNORE_CASE).containsMatchIn(command)
+        val fileWrite = Regex("""(?:^|[\s;&|])(?:rm|mv|cp|touch|tee|chmod|chown|dd|truncate)\b|sed\s+-i""")
+            .containsMatchIn(command)
+        // 重定向写：`> 目标` 且目标落在自家存储里（`>>` 同理；`2>` 也算）
+        val redirectWrite = Regex("""\d?>>?\s*([^\s;&|]+)""").findAll(command).any { match ->
+            val target = match.groupValues[1]
+            (target.contains("/shared_prefs/") || target.contains("/databases/")) &&
+                target.contains(ownPackage)
+        }
+        val writesStorage = sqliteWrite || fileWrite || redirectWrite
+        val editsOwnPrefs = touchesOwnStorage && contextText.contains(ownPackage) && writesStorage
         val restartsSelf = killsSelf && (contextText.contains("monkey") || contextText.contains("am start"))
         if (!killsSelf && !editsOwnPrefs) return null
         val consequence = when {
@@ -459,6 +534,169 @@ internal class AgentLocalTools(
      * 「帧率是 60」（实际 144）。这张卡就是「不确定」的出口：模型把问题和选项交上来，
      * 框架弹卡，用户选完答案以消息形式回灌，模型接着跑。
      */
+    /**
+     * 把应用加入插件作用域（issue #234）。
+     *
+     * 用户同意「加进去」之后由模型调用。这里把两道门、重启、验证一次做完，
+     * 返回的 steps 让模型能如实告诉用户卡在哪。
+     */
+    private fun pluginEnroll(args: JSONObject): String = try {
+        val pkg = args.optString("package").trim()
+        if (pkg.isBlank()) {
+            JSONObject().put("ok", false).put("code", "INVALID_ARGUMENT")
+                .put("message", "package 必填").toString()
+        } else {
+            val result = io.github.mangi.eta.agent.plugin.PluginEnrollment.enroll(
+                context = context,
+                packageName = pkg,
+                executor = rootCommandExecutor,
+            )
+            JSONObject()
+                .put("ok", result.ok)
+                .put("package", pkg)
+                .put("steps", org.json.JSONArray(result.steps))
+                .put("message", result.summary())
+                .toString()
+        }
+    } catch (error: Exception) {
+        JSONObject().put("ok", false).put("code", "ENROLL_FAILED")
+            .put("message", error.message ?: "加入失败").toString()
+    }
+
+    /**
+     * 进程内插件调用（issue #234）。
+     *
+     * 流程：root 读 <moduleDir>/app-plugins/<pkg>.port 拿端口+token →
+     * HTTP POST /invoke → 目标应用进程内的 AppPluginHost 分发到 JS 插件。
+     *
+     * 为什么用 HTTP 而不是 Binder/Messenger：插件宿主跑在任意应用进程里，
+     * 没有注册任何系统服务；loopback HTTP 是唯一不需要额外权限、
+     * 又能双向 JSON 通信的通道。
+     */
+    private fun appPluginCall(args: JSONObject): String = try {
+        val targetPackage = args.optString("package").trim()
+        val pluginId = args.optString("plugin").trim()
+        val method = args.optString("method").trim()
+        val inlineSource = args.optString("source").takeIf { it.isNotBlank() }
+        // 预置动作：模型不必每次现写 JS。传 action 即可，method 自动对应该动作。
+        val action = args.optString("action").trim()
+        val preset = BuiltinPluginActions.sourceFor(action)
+        val effectiveSource = inlineSource ?: preset
+        val effectiveMethod = method.ifBlank { BuiltinPluginActions.methodFor(action) }
+        if (targetPackage.isBlank() ||
+            (effectiveMethod.isBlank() && effectiveSource == null) ||
+            (pluginId.isBlank() && effectiveSource == null)
+        ) {
+            return JSONObject()
+                .put("ok", false)
+                .put("code", "INVALID_ARGUMENT")
+                .put("message", "package 必填；其余二选一：action（预置动作）或 source+method（自定义 JS）。" +
+                    "可用 action：" + BuiltinPluginActions.names().joinToString("/"))
+                .toString()
+        }
+
+        val endpoint = readPluginEndpoint(targetPackage)
+            ?: return JSONObject()
+                .put("ok", false)
+                .put("code", "PLUGIN_HOST_NOT_RUNNING")
+                .put("message",
+                    "目标应用 $targetPackage 的插件宿主没在运行（未启作用域、应用没开过、或 LSPosed 未注入）。" +
+                        "可以在设置里把 $targetPackage 加入插件作用域后重启它；或回退截图路径。")
+                .toString()
+
+        val request = JSONObject()
+            .put("plugin", pluginId.ifBlank { "builtin" })
+            .put("method", effectiveMethod)
+            .put("args", args.optJSONObject("args") ?: JSONObject())
+        // 直接传源码时宿主现场编译执行，不依赖目标应用沙盒里的插件文件。
+        effectiveSource?.let { request.put("source", it) }
+        val response = httpPostJson(
+            url = "http://127.0.0.1:${endpoint.port}/invoke",
+            token = endpoint.token,
+            body = request.toString(),
+        ) ?: return JSONObject()
+            .put("ok", false)
+            .put("code", "PLUGIN_HTTP_FAILED")
+            .put("message", "连不上插件宿主（127.0.0.1:${endpoint.port}），应用可能刚被杀掉")
+            .toString()
+
+        val json = runCatching { JSONObject(response) }.getOrElse {
+            return JSONObject()
+                .put("ok", false)
+                .put("code", "PLUGIN_BAD_RESPONSE")
+                .put("message", response.take(300))
+                .toString()
+        }
+        // 补上下文：模型需要知道这是哪个应用的哪个插件给出的结果
+        json.put("package", targetPackage).put("plugin", pluginId).put("method", method)
+        json.toString()
+    } catch (error: Exception) {
+        JSONObject()
+            .put("ok", false)
+            .put("code", "PLUGIN_CALL_FAILED")
+            .put("message", error.message ?: "插件调用失败")
+            .toString()
+    }
+
+    private data class PluginEndpoint(val port: Int, val token: String)
+
+    /**
+     * 发现插件宿主端点。
+     *
+     * 端口文件在目标应用的沙盒里（app_data_file），宿主进程外部读不到，
+     * 所以改用两条更可靠的路：
+     *  1. ss 找该 uid 的 loopback 监听端口（root 有权限）；
+     *  2. 端口拿到后 curl /health 取 token（loopback-only，仅本机可达）。
+     */
+    private fun readPluginEndpoint(targetPackage: String): PluginEndpoint? {
+        // 端口发现不依赖进程名（ss 会截断）也不依赖沙盒文件（SELinux 拦）。
+        // 做法：列出本机所有 loopback 监听端口，逐个问 /health，
+        // 谁回的 package 等于目标包名，谁就是插件宿主。
+        val portsResult = rootCommandExecutor.execute(
+            command = "ss -tln 2>/dev/null | grep '127.0.0.1' | grep -oE ':[0-9]+' | tr -d ':' | sort -u | head -40",
+            timeoutMillis = 6_000L,
+            maxOutputBytes = 1_000,
+        )
+        if (!portsResult.ok) return null
+        val ports = portsResult.stdout.lineSequence()
+            .mapNotNull { it.trim().toIntOrNull() }
+            .filter { it in 1..65535 }
+            .toList()
+        for (port in ports) {
+            val health = runCatching {
+                val connection = java.net.URL("http://127.0.0.1:" + port + "/health").openConnection()
+                    as java.net.HttpURLConnection
+                connection.connectTimeout = 800
+                connection.readTimeout = 1_200
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            }.getOrNull() ?: continue
+            val json = runCatching { JSONObject(health) }.getOrNull() ?: continue
+            if (json.optString("package") != targetPackage) continue
+            val token = json.optString("token")
+            if (token.isBlank()) continue
+            return PluginEndpoint(port, token)
+        }
+        return null
+    }
+
+    /** 无依赖 HTTP POST（java.net 标准库足够，loopback 上不值得引 OkHttp）。 */
+    private fun httpPostJson(url: String, token: String, body: String): String? = try {
+        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.connectTimeout = 5_000
+        connection.readTimeout = 20_000
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        connection.setRequestProperty("X-ETA-Token", token)
+        connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+    } catch (exception: Exception) {
+        logger.warn("app_plugin_call http failed: ${exception.message?.take(120)}")
+        null
+    }
+
     private fun askUser(args: JSONObject, toolCall: AgentModelClient.ToolCall): String = try {
         val question = args.optString("question").trim()
         val body = args.optString("body").trim()
@@ -762,8 +1000,22 @@ internal class AgentLocalTools(
             )
             json.toString()
         }.getOrDefault(effective.content)
+        // 观察回执里附带插件提示：模型每步都会读这个回执，
+        // 比系统提示词里的「建议」有效得多（实测光写提示词它照样截图点到底）。
+        val pluginNotice = runCatching {
+            val fgPackage = AgentAccessibilityService.current()
+                ?.currentPackageName(displayId)
+            if (fgPackage.isNullOrBlank()) return@runCatching null
+            if (!io.github.mangi.eta.agent.plugin.PluginEnrollment.hasHost(fgPackage)) return@runCatching null
+            JSONObject(content).put(
+                "plugin_available",
+                "当前应用 $fgPackage 已接入进程内插件（宿主运行中）。" +
+                    "别再用截图猜坐标了：直接用 app_plugin_call 调它的内部方法完成任务，" +
+                    "source 传 ({方法:function(args){...}})，用 javaCall/javaField/javaFind 调类。",
+            ).toString()
+        }.getOrNull()
         return AgentModelClient.ToolResult(
-            content = content,
+            content = pluginNotice ?: content,
             images = listOfNotNull(effective.image)
         )
     }
@@ -1186,10 +1438,34 @@ internal class AgentLocalTools(
             activeDisplayId = launchedVirtualId
             launchedVirtualId
         } else {
-            checkCancellation()
-            activeDisplayId = Display.DEFAULT_DISPLAY
-            context.startActivity(launchIntent)
-            Display.DEFAULT_DISPLAY
+            // 用户明确要求：打开应用只允许落在虚拟屏，绝不能悄悄落主屏。
+            // 早先虚拟屏没起来时会直接 context.startActivity(launchIntent)（不带 display），
+            // 表现就是应用顶到主屏、打断用户正在看的东西。
+            // 现在改为：目标本来就是主屏（用户显式指定）才允许，否则明确报错。
+            if (targetCanvas == CanvasRoutingPolicy.CanvasTarget.MAIN_DISPLAY) {
+                checkCancellation()
+                activeDisplayId = Display.DEFAULT_DISPLAY
+                context.startActivity(launchIntent)
+                Display.DEFAULT_DISPLAY
+            } else {
+                io.github.mangi.eta.core.EtaTrace.log("app.launch", "virtual_failed pkg=${app.packageName}")
+                // 失败不是终点：交给提问卡，用户自己决定要不要临时落到主屏。
+                io.github.mangi.eta.agent.display.dashboard.AgentConfirmGuard.ask(
+                    context = context,
+                    question = "虚拟屏启动失败",
+                    body = "「${app.appName.ifBlank { app.packageName }}」没能落到虚拟屏。要直接在主屏打开吗？",
+                    options = listOf(
+                        io.github.mangi.eta.agent.display.dashboard.PromptOption("main", "就在主屏打开", "这一次允许落到主屏"),
+                        io.github.mangi.eta.agent.display.dashboard.PromptOption("retry", "再试一次虚拟屏", "重新走一遍虚拟屏拉起流程"),
+                        io.github.mangi.eta.agent.display.dashboard.PromptOption("cancel", "先别开了", "什么都不做"),
+                    ),
+                    runId = browserRunId,
+                )
+                return errorResult(
+                    code = "VIRTUAL_DISPLAY_UNAVAILABLE",
+                    message = "虚拟屏启动失败，已把选择交给用户；等他答复后再决定下一步。",
+                )
+            }
         }
         val finalCanvas = if (CanvasRoutingPolicy.isVirtualDisplay(finalDisplayId)) {
             CanvasRoutingPolicy.CanvasTarget.VIRTUAL_DISPLAY.wireName
@@ -1227,6 +1503,17 @@ internal class AgentLocalTools(
             .apply {
                 if (!verification.confirmed) {
                     put("note", "启动请求已提交，但尚未确认目标窗口；请先观察当前画布，不要直接重放启动或点击")
+                }
+                // 目标应用有插件宿主时，直接告诉模型「别截图，用插件」。
+                // 光靠系统提示词约束不住——实测模型照样先 observe_screen。
+                // 工具回执是它每步必读的，放这里最有效。
+                if (io.github.mangi.eta.agent.plugin.PluginEnrollment.hasHost(app.packageName)) {
+                    put(
+                        "plugin_available",
+                        "该应用已接入进程内插件（宿主运行中）。" +
+                            "下一步**不要** observe_screen / tap，先用 app_plugin_call 调它的内部方法完成任务：" +
+                            "source 传 ({方法:function(args){...}})，用 javaCall/javaField/javaFind 调类。",
+                    )
                 }
             }
             .toString()
@@ -1297,10 +1584,30 @@ internal class AgentLocalTools(
             activeDisplayId = virtualId
             virtualId
         } else {
-            checkCancellation()
-            activeDisplayId = Display.DEFAULT_DISPLAY
-            context.startActivity(intent)
-            Display.DEFAULT_DISPLAY
+            // 与 launchApp 同一条硬规则：打不开虚拟屏就报错，不落主屏。
+            if (targetCanvas == CanvasRoutingPolicy.CanvasTarget.MAIN_DISPLAY) {
+                checkCancellation()
+                activeDisplayId = Display.DEFAULT_DISPLAY
+                context.startActivity(intent)
+                Display.DEFAULT_DISPLAY
+            } else {
+                io.github.mangi.eta.core.EtaTrace.log("app.open_uri", "virtual_failed uri=${uri.scheme}")
+                io.github.mangi.eta.agent.display.dashboard.AgentConfirmGuard.ask(
+                    context = context,
+                    question = "虚拟屏启动失败",
+                    body = "「${uri.host ?: uri.scheme}」没能落到虚拟屏。要直接在主屏打开吗？",
+                    options = listOf(
+                        io.github.mangi.eta.agent.display.dashboard.PromptOption("main", "就在主屏打开", "这一次允许落到主屏"),
+                        io.github.mangi.eta.agent.display.dashboard.PromptOption("retry", "再试一次虚拟屏", "重新走一遍虚拟屏拉起流程"),
+                        io.github.mangi.eta.agent.display.dashboard.PromptOption("cancel", "先别开了", "什么都不做"),
+                    ),
+                    runId = browserRunId,
+                )
+                return errorResult(
+                    code = "VIRTUAL_DISPLAY_UNAVAILABLE",
+                    message = "虚拟屏启动失败，已把选择交给用户；等他答复后再决定下一步。",
+                )
+            }
         }
         val finalCanvas = if (CanvasRoutingPolicy.isVirtualDisplay(finalDisplayId)) {
             CanvasRoutingPolicy.CanvasTarget.VIRTUAL_DISPLAY.wireName
