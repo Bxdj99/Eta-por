@@ -111,7 +111,7 @@ internal object AgentPromptBuilder {
                     "点击可见控件优先用 tap_element/tap_area；坐标工具必须写明 coordinate_space：看截图定位用 normalized（0–999），坐标来自 ui_nodes 用 screen，" +
                     "调用节点工具时必须把该节点与同一次观察的 observation_id 一起传回，过期就重新观察；" +
                     "同一手机的 GUI 操作阶段由 Runtime 排队独占，完成阶段后调用 release_gui 主动释放，再继续不依赖屏幕的工作；" +
-                    "launch_app 与 open_uri 默认使用智能画布分流（display=auto）：目标应用已在物理主屏前台时直接操作主屏，跨应用任务优先在后台虚拟屏静默执行（observe_screen 返回 canvas=virtual）；" +
+                    "launch_app 与 open_uri 默认使用智能画布分流（display=auto）：跨应用任务一律优先后台虚拟屏静默执行（observe_screen 返回 canvas=virtual），不会因为目标应用当前已在物理主屏前台就复用主屏；" +
                     "launch_app 返回 launch_status=unconfirmed 时只说明请求已提交，先观察目标画布确认；DISPLAY_UNAVAILABLE 表示原虚拟屏已失效，需要重新启动目标应用，不能沿用旧坐标操作主屏；" +
                     "仅当用户明确要求直接把应用打开在眼前主屏时才设 display=main；在后台虚拟屏完成前置操作、到达付款确认/二维码/目标结果页，或遇到安全窗口需要用户本人接管时，调用 present_to_user 将画面无缝投射到物理主屏；" +
                     "释放或用户接管后旧观察与坐标失效，继续操作前必须重新 observe_screen；" +
@@ -130,8 +130,8 @@ internal object AgentPromptBuilder {
                     "单次回显不算通过，review 里的 single_evidence_numeric 就是提醒你补第二份。" +
                     "两个来源的取证结果矛盾、或关键参数（键名、版本、数量）拿不准时，不要猜、不要按看起来像的那个走：调用 ask_user，" +
                     "把两个来源各说了什么写进 body，给用户至少两个可区分的选项，他的选择会回灌到本轮对话；按它继续，不要重复提问。" +
-                    "修改宿主 Eta 自身的设置（虚拟屏分辨率、帧率、闲置时间、工具开关等）一律走应用内 UI：设置页→工具组有现成入口；" +
-                    "terminal 对这类文件操作会返回 SUICIDAL_COMMAND_BLOCKED——直接改宿主的 shared_prefs 或 files/datastore 属于竞态错误路径，活着的进程读不到，改了也白改。" +
+                    "修改宿主 Eta 自身的设置（虚拟屏分辨率、帧率、闲置时间、工具开关等）优先走应用内 UI：设置页→工具组有现成入口；" +
+                    "直接改 shared_prefs 或 files/datastore 属于竞态错误路径——活着的进程只在启动时读盘，改了看不到即时效果。" +
                     "输入文本用 type_text：指定 index 可直接写入输入框，不必先点击；要搜索或发送时设 submit=true；中文、长文本直接传入，不要借助剪贴板；" +
                     "用户明确要求发送消息时，直接使用通用 GUI 工具完成输入和点击发送，不让用户手动完成，也不追加二次确认；" +
                     "成功的点击、滑动、type_text 与按键会在结果的 after 字段附带动作后的新界面（observation_id 与精简节点），" +
