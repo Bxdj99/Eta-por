@@ -2529,6 +2529,23 @@ internal class AgentAppState(
         if (!outcome.alreadyApplied) updateConversation(conversationId, outcome.state)
     }
 
+    /**
+     * 保存输入框草稿。
+     *
+     * 输入文本平时只存在输入框组件的本地 state 里（避免每个字符触发整屏重组），
+     * 但那样一切走画面组件就销毁，草稿跟着没了。输入组件在停顿和销毁时回调这里，
+     * 把文本写进会话状态并落盘，回来才能恢复。
+     */
+    fun updateDraft(text: String) {
+        if (!homeState.isConversationLoaded) return
+        if (homeState.input == text) return
+        updateCurrentConversation(
+            homeState.copy(input = text),
+            updateTimestamp = false,
+        )
+        if (selectedConversationId != null) persistConversations()
+    }
+
     private fun updateCurrentConversation(
         state: AgentChatHomeUiState,
         updateTimestamp: Boolean = true,

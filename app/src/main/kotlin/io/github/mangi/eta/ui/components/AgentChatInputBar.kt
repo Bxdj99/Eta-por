@@ -53,11 +53,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -100,6 +102,7 @@ import io.github.mangi.eta.ui.model.AgentContextUsageUi
 import io.github.mangi.eta.ui.model.AgentModelPickerUiState
 import io.github.mangi.eta.ui.model.PendingFileReferenceUi
 import io.github.mangi.eta.ui.model.PendingImageUi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import io.github.mangi.eta.ui.model.QueuedMessageUi
@@ -142,6 +145,15 @@ internal fun AgentChatInputBar(
     queuedMessages: List<QueuedMessageUi> = emptyList(),
     inputSyncVersion: Int = 0,
     focusInputOnSync: Boolean = true,
+    /**
+     * 草稿回传：输入停顿或组件销毁时把当前文本交给上层保存。
+     *
+     * 不加这个时输入文本只活在 textFieldState 里，切走画面组件销毁就没了，
+     * homeState.input 永远是空串，回来后草稿消失。
+     * 为了不让每个字符都触发聊天舞台重组，这里**只做防抖 + 销毁时兜底**，
+     * 不是逐字符回调。
+     */
+    onDraftChange: (String) -> Unit = {},
     isEditingMessage: Boolean,
     editHasLaterTurns: Boolean,
     preserveFollowingMessages: Boolean,
@@ -221,6 +233,23 @@ internal fun AgentChatInputBar(
         }
         wasEditingMessage = isEditingMessage
         syncedVersion = inputSyncVersion
+    }
+
+    // 草稿落盘：文本变化后防抖 400ms 回传一次；编辑态不回传（编辑的是历史消息，不是草稿）。
+    val currentText = textFieldState.text.toString()
+    LaunchedEffect(currentText, isEditingMessage) {
+        if (isEditingMessage) return@LaunchedEffect
+        if (currentText == input) return@LaunchedEffect
+        delay(400)
+        onDraftChange(currentText)
+    }
+    // 组件被销毁（切页面、退后台、会话切换）时兜底保存，这是草稿不丢的关键。
+    val latestText by rememberUpdatedState(currentText)
+    val latestEditing by rememberUpdatedState(isEditingMessage)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!latestEditing) onDraftChange(latestText)
+        }
     }
 
     Column(
